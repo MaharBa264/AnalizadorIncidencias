@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+
+{% block title %}Administración{% endblock %}
+
+{% block content %}
+<header class="mb-8">
+    <h1 class="text-3xl md:text-4xl font-bold text-gray-900">Panel de Administración</h1>
+    <p class="text-md text-gray-600 mt-1">Herramientas y acciones restringidas.</p>
+</header>
+
+<div class="bg-white p-6 rounded-xl shadow-md max-w-md">
+     <h3 class="text-xl font-semibold mb-4 text-red-600">Zona de Peligro</h3>
+     
+     {% with messages = get_flashed_messages(with_categories=true) %}
+        {% if messages %}
+            {% for category, message in messages %}
+                {% if category == 'success' %}
+                    <div class="p-4 mb-4 text-sm text-green-700 bg-green-100 rounded-lg" role="alert">
+                        {{ message }}
+                    </div>
+                {% else %}
+                    <div class="p-4 mb-4 text-sm text-red-700 bg-red-100 rounded-lg" role="alert">
+                        {{ message }}
+                    </div>
+                {% endif %}
+            {% endfor %}
+        {% endif %}
+    {% endwith %}
+
+     <p class="text-gray-600 mb-4">La siguiente acción eliminará permanentemente todos los registros de incidencias de la base de datos InfluxDB. Esta acción es irreversible.</p>
+     <form action="{{ url_for('main.purge_data') }}" method="post" onsubmit="return confirm('¿Estás SEGURO de que quieres borrar todos los datos de incidencias? Esta acción es IRREVERSIBLE.');">
+         <button type="submit" class="w-full bg-red-600 text-white font-bold py-2 px-4 rounded-lg hover:bg-red-700 transition duration-300">
+             Purgar Base de Datos de Incidencias
+         </button>
+     </form>
+</div>
+{% endblock %}

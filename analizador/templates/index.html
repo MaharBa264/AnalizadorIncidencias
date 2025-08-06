@@ -1,0 +1,111 @@
+{% extends "base.html" %}
+
+{% block title %}Panel de Reportes{% endblock %}
+
+{% block content %}
+<!-- Panel de Filtros -->
+<div class="bg-white p-6 rounded-xl shadow-md mb-8">
+    <h2 class="text-2xl font-bold mb-4">Filtrar Incidencias</h2>
+    <form method="POST" action="{{ url_for('main.index') }}">
+        <div class="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-4 gap-4 items-end">
+            <!-- Filtro Fecha Desde -->
+            <div>
+                <label for="start_date" class="block text-sm font-medium text-gray-700">Fecha Desde</label>
+                <input type="date" name="start_date" id="start_date" value="{{ form_data.start_date }}" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm">
+            </div>
+            <!-- Filtro Fecha Hasta -->
+            <div>
+                <label for="end_date" class="block text-sm font-medium text-gray-700">Fecha Hasta</label>
+                <input type="date" name="end_date" id="end_date" value="{{ form_data.end_date }}" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm">
+            </div>
+            <!-- Filtro Distrito -->
+            <div>
+                <label for="distrito" class="block text-sm font-medium text-gray-700">Distrito</label>
+                <select name="distrito" id="distrito" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm">
+                    <option value="">Todos</option>
+                    {% for distrito in distritos %}
+                        <option value="{{ distrito }}" {% if form_data.distrito == distrito %}selected{% endif %}>{{ distrito }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <!-- Filtro Causa -->
+            <div class="lg:col-span-2">
+                <label for="causa" class="block text-sm font-medium text-gray-700">Causa</label>
+                <select name="causa" id="causa" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm">
+                    <option value="">Todas</option>
+                     {% for causa in causas %}
+                        <option value="{{ causa }}" {% if form_data.causa == causa %}selected{% endif %}>{{ causa }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <!-- Botón de Filtrar -->
+            <div class="md:col-start-4 lg:col-start-4">
+                <button type="submit" class="w-full bg-blue-600 text-white font-bold py-2 px-4 rounded-lg hover:bg-blue-700 transition duration-300">Filtrar</button>
+            </div>
+        </div>
+    </form>
+    <!-- Lista de Fechas Disponibles -->
+    <div class="mt-4">
+        <details>
+            <summary class="cursor-pointer text-sm text-blue-600 hover:underline">Ver fechas con datos</summary>
+            <div class="mt-2 p-4 bg-gray-50 rounded-md max-h-32 overflow-y-auto">
+                <p class="text-xs text-gray-600">
+                    {% if available_dates %}
+                        {{ available_dates | join(', ') }}
+                    {% else %}
+                        No hay datos de incidencias en la base.
+                    {% endif %}
+                </p>
+            </div>
+        </details>
+    </div>
+</div>
+
+<!-- Sección de Resultados -->
+{% if request.method == 'POST' %}
+<div class="bg-white p-6 rounded-xl shadow-md">
+    <div class="flex justify-between items-center mb-4">
+        <h2 class="text-2xl font-bold">Resultados de la Búsqueda</h2>
+        {% if incidents %}
+        <a href="{{ url_for('main.download_xls', start_date=form_data.start_date, end_date=form_data.end_date, distrito=form_data.distrito, causa=form_data.causa) }}" class="bg-green-600 text-white font-bold py-2 px-4 rounded-lg hover:bg-green-700 transition duration-300">
+            Descargar XLS
+        </a>
+        {% endif %}
+    </div>
+    <div class="overflow-auto max-h-[60vh]">
+        <table class="min-w-full divide-y divide-gray-200">
+            <thead class="bg-gray-50 sticky top-0">
+                <tr>
+                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Nro. Incidencia</th>
+                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Fecha de Inicio</th>
+                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Hora de Inicio</th>
+                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Fecha de Fin</th>
+                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Hora de Fin</th>
+                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Distrito</th>
+                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Causa</th>
+                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Reclamos</th>
+                </tr>
+            </thead>
+            <tbody class="bg-white divide-y divide-gray-200">
+                {% for incident in incidents %}
+                <tr>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{{ incident.nro_incidencia }}</td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{{ incident.fecha_inicio_fmt }}</td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{{ incident.hora_inicio_fmt }}</td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{{ incident.fecha_fin_fmt }}</td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{{ incident.hora_fin_fmt }}</td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{{ incident.distrito }}</td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 truncate" title="{{ incident.descripcion_de_la_causa }}">{{ incident.descripcion_de_la_causa }}</td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{{ incident.cantidad_de_reclamos }}</td>
+                </tr>
+                {% else %}
+                <tr>
+                    <td colspan="8" class="px-6 py-4 text-center text-gray-500">No se encontraron incidencias con los filtros seleccionados.</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endif %}
+{% endblock %}

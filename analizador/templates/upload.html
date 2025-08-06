@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+
+{% block title %}Cargar Datos{% endblock %}
+
+{% block content %}
+<div class="max-w-xl mx-auto">
+    <div class="bg-white p-6 rounded-xl shadow-md">
+        <h2 class="text-2xl font-bold mb-4">Cargar Archivo de Incidencias</h2>
+        <p class="text-gray-600 mb-6">Selecciona un archivo en formato CSV o Excel (.xls, .xlsx) para procesar y añadir a la base de datos.</p>
+        
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                {% for category, message in messages %}
+                    {% if category == 'success' %}
+                        <div class="p-4 mb-4 text-sm text-green-700 bg-green-100 rounded-lg" role="alert">
+                            {{ message }}
+                        </div>
+                    {% else %}
+                        <div class="p-4 mb-4 text-sm text-red-700 bg-red-100 rounded-lg" role="alert">
+                            {{ message }}
+                        </div>
+                    {% endif %}
+                {% endfor %}
+            {% endif %}
+        {% endwith %}
+
+        <form action="{{ url_for('main.upload_file') }}" method="post" enctype="multipart/form-data" class="space-y-4">
+            <input type="file" name="file" class="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100" required>
+            <button type="submit" class="w-full bg-blue-600 text-white font-bold py-2 px-4 rounded-lg hover:bg-blue-700 transition duration-300">
+                Procesar Archivo
+            </button>
+        </form>
+    </div>
+</div>
+{% endblock %}

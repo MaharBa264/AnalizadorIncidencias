@@ -1,0 +1,23 @@
+# Entorno Virtual
+venv/
+.venv/
+
+# Archivos de caché de Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Archivos del IDE (ej. VSCode, PyCharm)
+.vscode/
+.idea/
+
+# Archivos de dependencias (generados)
+*.egg-info/
+dist/
+build/
+
+# Archivos de entorno (contienen secretos)
+.env
+
+uploads/

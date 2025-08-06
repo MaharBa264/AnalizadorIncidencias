@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}Analizador de Incidencias{% endblock %}</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style> body { font-family: 'Inter', sans-serif; } </style>
+</head>
+<body class="bg-gray-100 text-gray-800">
+    <nav class="bg-white shadow-md">
+        <div class="container mx-auto px-6 py-3 flex justify-between items-center">
+            <a href="{{ url_for('main.index') }}" class="text-xl font-bold text-gray-900">Analizador de Incidencias</a>
+            <div>
+                <a href="{{ url_for('main.upload_page') }}" class="text-gray-700 hover:text-blue-600 mr-4">Cargar Datos</a>
+                {% if current_user.role == 'admin' %}
+                    <a href="{{ url_for('main.admin_page') }}" class="text-gray-700 hover:text-blue-600 mr-4">Admin</a>
+                {% endif %}
+                <span class="text-gray-700 mr-4">Hola, {{ name }}</span>
+                <a href="{{ url_for('auth.logout') }}" class="bg-blue-600 text-white font-bold py-2 px-4 rounded-lg hover:bg-blue-700 transition duration-300">Cerrar Sesión</a>
+            </div>
+        </div>
+    </nav>
+    <div class="container mx-auto p-4 sm:p-6 md:p-8">
+        {% block content %}{% endblock %}
+    </div>
+</body>
+</html>
