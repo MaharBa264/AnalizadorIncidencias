@@ -4,6 +4,7 @@
 import os
 import io
 import pandas as pd
+import threading
 from datetime import datetime, timedelta
 from flask import render_template, request, redirect, url_for, jsonify, current_app, send_file, flash
 from flask_login import login_required, current_user
@@ -11,6 +12,7 @@ from . import main
 from .. import influx_client, INFLUXDB_ORG, INFLUXDB_BUCKET
 from ..services import process_file_to_influxdb
 from ..decorators import admin_required
+
 
 def get_filter_options():
     """Obtiene distritos y causas desde tags indexados de InfluxDB."""
@@ -224,13 +226,20 @@ def admin_page():
 @login_required
 @admin_required
 def purge_data():
-    try:
-        delete_api = influx_client.delete_api()
-        start = "1970-01-01T00:00:00Z"
-        stop = datetime.utcnow().isoformat() + "Z"
-        predicate = '_measurement="incidencia_electrica"'
-        delete_api.delete(start, stop, predicate, bucket=INFLUXDB_BUCKET, org=INFLUXDB_ORG)
-        flash("Base de datos de incidencias purgada exitosamente.", "success")
-    except Exception as e:
-        flash(f"Error durante la purga de datos: {e}", "error")
+    def run_purge():
+        try:
+            buckets_api = influx_client.buckets_api()
+            bucket = buckets_api.find_bucket_by_name(INFLUXDB_BUCKET)
+            if bucket:
+                buckets_api.delete_bucket(bucket)
+                buckets_api.create_bucket(bucket_name=INFLUXDB_BUCKET, org=INFLUXDB_ORG)
+                print("✔ Bucket eliminado y recreado exitosamente.")
+            else:
+                print(f"⚠ Bucket '{INFLUXDB_BUCKET}' no encontrado.")
+        except Exception as e:
+            print(f"❌ Error durante recreación de bucket: {e}")
+
+    threading.Thread(target=run_purge).start()
+    flash("El bucket fue purgado y recreado. Puede demorar unos segundos en verse reflejado.", "info")
     return redirect(url_for('main.admin_page'))
+

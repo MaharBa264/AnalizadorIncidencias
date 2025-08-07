@@ -75,6 +75,13 @@ def process_file_to_influxdb(filepath):
                     .tag("distribuidor", str(getattr(row, "distribuidor", ""))) \
                     .tag("instalacion", str(getattr(row, "instalacion", ""))) \
                     .field("indice", i) \
+                    .field("nro_incidencia", int(getattr(row, "nro_incidencia", 0))) \
+                    .field("fecha_fin", str(getattr(row, "fecha_fin", ""))) \
+                    .field("hora_fin", str(getattr(row, "hora_fin", ""))) \
+                    .field("cantidad_de_reclamos", int(getattr(row, "cantidad_de_reclamos", 0))) \
+                    .field("ct_involucrados", int(getattr(row, "ct_involucrados", 0))) \
+                    .field("nises_involucrados", int(getattr(row, "nises_involucrados", 0))) \
+                    .field("potencia_involucrada", float(getattr(row, "potencia_involucrada", 0.0))) \
                     .time(getattr(row, "fecha_inicio"))
                 batch.append(point)
 
