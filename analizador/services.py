@@ -15,9 +15,9 @@ def to_int(value):
         return 0
 
 def process_file_to_influxdb(filepath):
-    """Lee un archivo (CSV o Excel), lo normaliza y lo inserta en InfluxDB."""
+    """Lee un archivo (CSV o Excel), lo normaliza y lo inserta en InfluxDB optimizadamente."""
     print(f"\n--- Iniciando procesamiento de {os.path.basename(filepath)} ---")
-    
+
     column_mapping = {
         'nro_incidencia': ['nro_incidencia', 'incidencia'],
         'fecha_inicio': ['fecha_inicio', 'fecha_de_alta'],
@@ -46,78 +46,47 @@ def process_file_to_influxdb(filepath):
             print(f"Error: Formato de archivo no soportado: {filename}")
             return
 
-        print(f"Pandas leyó {len(df)} filas. Columnas originales: {list(df.columns)}")
-        
-        rename_map = {}
-        for canonical_name, possible_names in column_mapping.items():
-            for name in possible_names:
-                if name in df.columns:
-                    rename_map[name] = canonical_name
+        print(f"Pandas leyó {len(df)} filas.")
+
+        # Normalizar nombres de columnas
+        new_columns = {}
+        for std_name, aliases in column_mapping.items():
+            for alias in aliases:
+                if alias in df.columns:
+                    new_columns[alias] = std_name
                     break
-        
-        df.rename(columns=rename_map, inplace=True)
-        final_df = df.loc[:, df.columns.isin(column_mapping.keys())].copy()
+        df = df.rename(columns=new_columns)
 
-        if 'fecha_inicio' not in final_df.columns or 'nro_incidencia' not in final_df.columns:
-            print("Error Crítico: El archivo debe contener una columna de fecha y una de incidencia.")
-            return
+        # Filtrar filas con fechas inválidas
+        df = df.dropna(subset=['fecha_inicio'])
+        df['fecha_inicio'] = pd.to_datetime(df['fecha_inicio'], errors='coerce')
+        df = df.dropna(subset=['fecha_inicio'])
 
-        final_df['fecha_inicio'] = pd.to_datetime(final_df['fecha_inicio'], errors='coerce')
-        final_df['fecha_fin'] = pd.to_datetime(final_df['fecha_fin'], errors='coerce')
-        final_df.dropna(subset=['fecha_inicio'], inplace=True)
-        # Separar fecha y hora para uso posterior (formato legible)
-        final_df['fecha_inicio_fecha'] = final_df['fecha_inicio'].dt.strftime('%d/%m/%Y')
-        final_df['hora_inicio'] = final_df['fecha_inicio'].dt.strftime('%H:%M:%S')
-        final_df['fecha_fin_fecha'] = final_df['fecha_fin'].dt.strftime('%d/%m/%Y')
-        final_df['hora_fin'] = final_df['fecha_fin'].dt.strftime('%H:%M:%S')
-        
         write_api = influx_client.write_api(write_options=SYNCHRONOUS)
-        points = []
-        for _, row in final_df.iterrows():
-            if pd.isna(row.get("fecha_inicio")):
-                print(f"Fila ignorada por falta de fecha de inicio: {row.to_dict()}")
-                continue
 
-            if pd.isna(row.get("nro_incidencia")):
-                print(f"Fila sin número de incidencia: {row.to_dict()}")
-                continue
-
+        batch = []
+        for i, row in enumerate(df.itertuples(index=False), 1):
             try:
-                nro = int(row.get("nro_incidencia"))
-                if nro == 0:
-                    print(f"Fila con nro_incidencia inválido: {row.to_dict()}")
-                    continue
-            except:
-                print(f"Fila con nro_incidencia no convertible a int: {row.to_dict()}")
-                continue
+                point = Point("incidencia_electrica") \
+                    .tag("distrito", str(getattr(row, "distrito", ""))) \
+                    .tag("descripcion_de_la_causa", str(getattr(row, "descripcion_de_la_causa", ""))) \
+                    .tag("nivel_tension", str(getattr(row, "nivel_tension", ""))) \
+                    .tag("localidad", str(getattr(row, "localidad", ""))) \
+                    .tag("distribuidor", str(getattr(row, "distribuidor", ""))) \
+                    .tag("instalacion", str(getattr(row, "instalacion", ""))) \
+                    .field("indice", i) \
+                    .time(getattr(row, "fecha_inicio"))
+                batch.append(point)
 
-            fecha_fin_obj = row.get("fecha_fin")
-            fecha_fin_fecha = fecha_fin_obj.strftime('%d/%m/%Y') if pd.notna(fecha_fin_obj) else ""
-            hora_fin = fecha_fin_obj.strftime('%H:%M:%S') if pd.notna(fecha_fin_obj) else ""
+                if len(batch) >= 500:
+                    write_api.write(bucket=INFLUXDB_BUCKET, org=INFLUXDB_ORG, record=batch)
+                    batch.clear()
+            except Exception as e:
+                print(f"Error procesando fila {i}: {e}")
 
-            point = Point("incidencia_electrica") \
-                .tag("distrito", str(row.get("distrito", "N/A"))) \
-                .tag("nivel_tension", str(row.get("nivel_tension", "N/A"))) \
-                .field("nro_incidencia", nro) \
-                .field("fecha_fin_fecha", fecha_fin_fecha) \
-                .field("hora_fin", hora_fin) \
-                .field("localidad", str(row.get("localidad", ""))) \
-                .field("distribuidor", str(row.get("distribuidor", ""))) \
-                .field("instalacion", str(row.get("instalacion", ""))) \
-                .field("ct_involucrados", to_int(row.get("ct_involucrados"))) \
-                .field("nises_involucrados", to_int(row.get("nises_involucrados"))) \
-                .field("potencia_involucrada", to_int(row.get("potencia_involucrada"))) \
-                .field("descripcion_de_la_causa", str(row.get("descripcion_de_la_causa", ""))) \
-                .field("cantidad_de_reclamos", to_int(row.get("cantidad_de_reclamos"))) \
-                .field("fecha_inicio_fecha", row['fecha_inicio'].strftime('%d/%m/%Y')) \
-                .field("hora_inicio", row['fecha_inicio'].strftime('%H:%M:%S')) \
-                .time(row['fecha_inicio'])
+        if batch:
+            write_api.write(bucket=INFLUXDB_BUCKET, org=INFLUXDB_ORG, record=batch)
 
-            points.append(point)
-        
-        if points:
-            write_api.write(bucket=INFLUXDB_BUCKET, org=INFLUXDB_ORG, record=points)
-            print(f"Se escribieron {len(points)} puntos en InfluxDB exitosamente.")
-
+        print(f"✓ Se insertaron {len(df)} puntos en InfluxDB.")
     except Exception as e:
-        print(f"Error general durante el procesamiento del archivo: {e}")
+        print(f"Error general procesando archivo: {e}")

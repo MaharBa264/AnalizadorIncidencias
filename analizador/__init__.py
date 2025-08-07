@@ -21,7 +21,7 @@ INFLUXDB_ORG = os.getenv('INFLUXDB_ORG')
 INFLUXDB_BUCKET = os.getenv('INFLUXDB_BUCKET')
 
 # Cliente global de InfluxDB
-influx_client = InfluxDBClient(url=INFLUXDB_URL, token=INFLUXDB_TOKEN, org=INFLUXDB_ORG)
+influx_client = InfluxDBClient(url=INFLUXDB_URL, token=INFLUXDB_TOKEN, org=INFLUXDB_ORG, timeout=30_000)
 
 def setup_influxdb():
     """Comprueba si el bucket de InfluxDB existe y lo crea si es necesario."""

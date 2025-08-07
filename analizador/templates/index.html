@@ -130,6 +130,32 @@ function actualizarFechasHasta() {
 document.addEventListener("DOMContentLoaded", () => {
     actualizarFechasHasta();
 });
+document.addEventListener("DOMContentLoaded", function () {
+    fetch("/filtros_opciones")
+        .then(res => res.json())
+        .then(data => {
+            const distritoSelect = document.getElementById("distrito");
+            const causaSelect = document.getElementById("causa");
+
+            if (!distritoSelect || !causaSelect) return;
+
+            data.distritos.forEach(val => {
+                const opt = document.createElement("option");
+                opt.value = val;
+                opt.textContent = val;
+                if (val === "{{ form_data.distrito }}") opt.selected = true;
+                distritoSelect.appendChild(opt);
+            });
+
+            data.causas.forEach(val => {
+                const opt = document.createElement("option");
+                opt.value = val;
+                opt.textContent = val;
+                if (val === "{{ form_data.causa }}") opt.selected = true;
+                causaSelect.appendChild(opt);
+            });
+        });
+});
 </script>
 
 {% endif %}

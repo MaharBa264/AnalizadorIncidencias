@@ -13,21 +13,31 @@ from ..services import process_file_to_influxdb
 from ..decorators import admin_required
 
 def get_filter_options():
-    """Obtiene los distritos y causas únicos de InfluxDB para los menús desplegables."""
+    """Obtiene distritos y causas desde tags indexados de InfluxDB."""
     distritos, causas = [], []
     try:
         query_api = influx_client.query_api()
-        q_distritos = f'import "influxdata/influxdb/schema" schema.tagValues(bucket: "{INFLUXDB_BUCKET}", tag: "distrito", start: -5y)'
+
+        q_distritos = f"""
+            import \"influxdata/influxdb/schema\"
+            schema.tagValues(bucket: \"{INFLUXDB_BUCKET}\", tag: \"distrito\", start: -5y)
+        """
+        q_causas = f"""
+            import \"influxdata/influxdb/schema\"
+            schema.tagValues(bucket: \"{INFLUXDB_BUCKET}\", tag: \"descripcion_de_la_causa\", start: -5y)
+        """
+
         result_distritos = query_api.query(q_distritos, org=INFLUXDB_ORG)
-        if result_distritos:
-            distritos = [row.values['_value'] for row in result_distritos[0].records]
-        q_causas = f'from(bucket: "{INFLUXDB_BUCKET}") |> range(start: -5y) |> filter(fn: (r) => r._measurement == "incidencia_electrica" and r._field == "descripcion_de_la_causa") |> group() |> distinct(column: "_value") |> keep(columns: ["_value"])'
         result_causas = query_api.query(q_causas, org=INFLUXDB_ORG)
-        if result_causas:
-            causas = [row.values['_value'] for row in result_causas[0].records if row.values['_value']]
+
+        distritos = [row.values["_value"] for table in result_distritos for row in table.records]
+        causas = [row.values["_value"] for table in result_causas for row in table.records]
+
     except Exception as e:
         print(f"Error obteniendo opciones de filtro: {e}")
+
     return sorted(distritos), sorted(causas)
+
 
 def get_available_dates():
     """Obtiene fechas únicas ordenadas con datos en el bucket."""
@@ -80,6 +90,7 @@ def get_filtered_incidents(start_date, end_date, distrito, causa):
             incident['hora_inicio_fmt'] = incident['_time'].strftime('%H:%M:%S')
             incident['fecha_fin_fmt'] = incident.get('fecha_fin_fecha', '')
             incident['hora_fin_fmt'] = incident.get('hora_fin', '')
+            incident['hora_fin_fmt'] = incident.get('hora_fin', '')
             processed_incidents.append(incident)
     except Exception as e:
         print(f"Error al ejecutar la query de filtro: {e}")
@@ -110,7 +121,20 @@ def index():
         if start_date and not end_date:
             end_date = start_date + timedelta(days=1)
         incidents = get_filtered_incidents(start_date, end_date, distrito, causa)
-    return render_template('index.html', name=current_user.name, incidents=incidents, distritos=distritos, causas=causas, available_dates=available_dates, form_data=form_data)
+    return render_template('index.html',
+                            name=current_user.name,
+                            incidents=incidents,
+                            available_dates=available_dates,
+                            form_data=form_data,
+                            distritos=distritos,  # ✅ USAR DATOS REALES
+                            causas=causas)
+
+@main.route('/filtros_opciones')
+@login_required
+def filtros_opciones():
+    distritos, causas = get_filter_options()
+    return jsonify({'distritos': distritos, 'causas': causas})
+
 
 @main.route('/upload_page')
 @login_required
