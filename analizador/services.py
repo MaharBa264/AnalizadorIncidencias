@@ -65,16 +65,42 @@ def process_file_to_influxdb(filepath):
         final_df['fecha_inicio'] = pd.to_datetime(final_df['fecha_inicio'], errors='coerce')
         final_df['fecha_fin'] = pd.to_datetime(final_df['fecha_fin'], errors='coerce')
         final_df.dropna(subset=['fecha_inicio'], inplace=True)
+        # Separar fecha y hora para uso posterior (formato legible)
+        final_df['fecha_inicio_fecha'] = final_df['fecha_inicio'].dt.strftime('%d/%m/%Y')
+        final_df['hora_inicio'] = final_df['fecha_inicio'].dt.strftime('%H:%M:%S')
+        final_df['fecha_fin_fecha'] = final_df['fecha_fin'].dt.strftime('%d/%m/%Y')
+        final_df['hora_fin'] = final_df['fecha_fin'].dt.strftime('%H:%M:%S')
         
         write_api = influx_client.write_api(write_options=SYNCHRONOUS)
         points = []
         for _, row in final_df.iterrows():
-            fecha_fin_str = row['fecha_fin'].strftime('%Y-%m-%d %H:%M:%S') if pd.notna(row['fecha_fin']) else ""
+            if pd.isna(row.get("fecha_inicio")):
+                print(f"Fila ignorada por falta de fecha de inicio: {row.to_dict()}")
+                continue
+
+            if pd.isna(row.get("nro_incidencia")):
+                print(f"Fila sin número de incidencia: {row.to_dict()}")
+                continue
+
+            try:
+                nro = int(row.get("nro_incidencia"))
+                if nro == 0:
+                    print(f"Fila con nro_incidencia inválido: {row.to_dict()}")
+                    continue
+            except:
+                print(f"Fila con nro_incidencia no convertible a int: {row.to_dict()}")
+                continue
+
+            fecha_fin_obj = row.get("fecha_fin")
+            fecha_fin_fecha = fecha_fin_obj.strftime('%d/%m/%Y') if pd.notna(fecha_fin_obj) else ""
+            hora_fin = fecha_fin_obj.strftime('%H:%M:%S') if pd.notna(fecha_fin_obj) else ""
+
             point = Point("incidencia_electrica") \
                 .tag("distrito", str(row.get("distrito", "N/A"))) \
                 .tag("nivel_tension", str(row.get("nivel_tension", "N/A"))) \
-                .field("nro_incidencia", to_int(row.get("nro_incidencia"))) \
-                .field("fecha_fin", fecha_fin_str) \
+                .field("nro_incidencia", nro) \
+                .field("fecha_fin_fecha", fecha_fin_fecha) \
+                .field("hora_fin", hora_fin) \
                 .field("localidad", str(row.get("localidad", ""))) \
                 .field("distribuidor", str(row.get("distribuidor", ""))) \
                 .field("instalacion", str(row.get("instalacion", ""))) \
@@ -83,7 +109,10 @@ def process_file_to_influxdb(filepath):
                 .field("potencia_involucrada", to_int(row.get("potencia_involucrada"))) \
                 .field("descripcion_de_la_causa", str(row.get("descripcion_de_la_causa", ""))) \
                 .field("cantidad_de_reclamos", to_int(row.get("cantidad_de_reclamos"))) \
+                .field("fecha_inicio_fecha", row['fecha_inicio'].strftime('%d/%m/%Y')) \
+                .field("hora_inicio", row['fecha_inicio'].strftime('%H:%M:%S')) \
                 .time(row['fecha_inicio'])
+
             points.append(point)
         
         if points:

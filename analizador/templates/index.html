@@ -11,12 +11,22 @@
             <!-- Filtro Fecha Desde -->
             <div>
                 <label for="start_date" class="block text-sm font-medium text-gray-700">Fecha Desde</label>
-                <input type="date" name="start_date" id="start_date" value="{{ form_data.start_date }}" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm">
+                <select name="start_date" id="start_date" onchange="actualizarFechasHasta()" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm">
+                    <option value="">-- Todas --</option>
+                    {% for f in available_dates %}
+                        <option value="{{ f }}" {% if form_data.start_date == f %}selected{% endif %}>{{ f }}</option>
+                    {% endfor %}
+                </select>
             </div>
             <!-- Filtro Fecha Hasta -->
             <div>
                 <label for="end_date" class="block text-sm font-medium text-gray-700">Fecha Hasta</label>
-                <input type="date" name="end_date" id="end_date" value="{{ form_data.end_date }}" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm">
+                <select name="end_date" id="end_date" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm">
+                    <option value="">-- Todas --</option>
+                    {% for f in available_dates if not form_data.start_date or f >= form_data.start_date %}
+                        <option value="{{ f }}" {% if form_data.end_date == f %}selected{% endif %}>{{ f }}</option>
+                    {% endfor %}
+                </select>
             </div>
             <!-- Filtro Distrito -->
             <div>
@@ -44,21 +54,6 @@
             </div>
         </div>
     </form>
-    <!-- Lista de Fechas Disponibles -->
-    <div class="mt-4">
-        <details>
-            <summary class="cursor-pointer text-sm text-blue-600 hover:underline">Ver fechas con datos</summary>
-            <div class="mt-2 p-4 bg-gray-50 rounded-md max-h-32 overflow-y-auto">
-                <p class="text-xs text-gray-600">
-                    {% if available_dates %}
-                        {{ available_dates | join(', ') }}
-                    {% else %}
-                        No hay datos de incidencias en la base.
-                    {% endif %}
-                </p>
-            </div>
-        </details>
-    </div>
 </div>
 
 <!-- Sección de Resultados -->
@@ -107,5 +102,35 @@
         </table>
     </div>
 </div>
+
+<script>
+function actualizarFechasHasta() {
+    const startSelect = document.getElementById("start_date");
+    const endSelect = document.getElementById("end_date");
+    const selectedStart = startSelect.value;
+
+    // Guardamos la opción seleccionada actual de fecha fin
+    const previousEnd = endSelect.value;
+
+    // Guardamos todas las fechas desde el HTML
+    const allDates = [...startSelect.options].map(opt => opt.value).filter(v => v);
+
+    // Reconstruimos el select de Fecha Hasta
+    endSelect.innerHTML = '<option value="">-- Todas --</option>';
+    allDates.filter(f => !selectedStart || f >= selectedStart).forEach(f => {
+        const opt = document.createElement("option");
+        opt.value = f;
+        opt.textContent = f;
+        if (f === previousEnd) opt.selected = true;
+        endSelect.appendChild(opt);
+    });
+}
+
+// Inicializar en caso de que ya esté seleccionada una fecha de inicio
+document.addEventListener("DOMContentLoaded", () => {
+    actualizarFechasHasta();
+});
+</script>
+
 {% endif %}
 {% endblock %}

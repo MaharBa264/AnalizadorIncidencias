@@ -4,7 +4,7 @@
 import os
 import io
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, timedelta
 from flask import render_template, request, redirect, url_for, jsonify, current_app, send_file, flash
 from flask_login import login_required, current_user
 from . import main
@@ -17,7 +17,7 @@ def get_filter_options():
     distritos, causas = [], []
     try:
         query_api = influx_client.query_api()
-        q_distritos = f'import "influxdata/influxdb/schema"; schema.tagValues(bucket: "{INFLUXDB_BUCKET}", tag: "distrito", start: -5y)'
+        q_distritos = f'import "influxdata/influxdb/schema" schema.tagValues(bucket: "{INFLUXDB_BUCKET}", tag: "distrito", start: -5y)'
         result_distritos = query_api.query(q_distritos, org=INFLUXDB_ORG)
         if result_distritos:
             distritos = [row.values['_value'] for row in result_distritos[0].records]
@@ -30,18 +30,25 @@ def get_filter_options():
     return sorted(distritos), sorted(causas)
 
 def get_available_dates():
-    """Obtiene una lista de fechas (YYYY-MM-DD) que tienen incidencias."""
-    dates = []
+    """Obtiene fechas únicas ordenadas con datos en el bucket."""
+    dates = set()
     try:
         query_api = influx_client.query_api()
-        query = f'from(bucket: "{INFLUXDB_BUCKET}") |> range(start: -5y) |> filter(fn: (r) => r._measurement == "incidencia_electrica") |> aggregateWindow(every: 1d, fn: count, createEmpty: false) |> keep(columns: ["_time"]) |> sort(columns: ["_time"], desc: true)'
-        tables = query_api.query(query, org=INFLUXDB_ORG)
-        for table in tables:
+        query = f'''
+            from(bucket: "{INFLUXDB_BUCKET}")
+                |> range(start: -5y)
+                |> filter(fn: (r) => r._measurement == "incidencia_electrica")
+                |> keep(columns: ["_time"])
+        '''
+        result = query_api.query(query, org=INFLUXDB_ORG)
+        for table in result:
             for record in table.records:
-                dates.append(record.get_time().strftime('%Y-%m-%d'))
+                date_str = record.get_time().strftime('%Y-%m-%d')
+                dates.add(date_str)
     except Exception as e:
-        print(f"Error obteniendo fechas disponibles: {e}")
-    return dates
+        print(f"Error obteniendo fechas: {e}")
+    return sorted(dates)
+
 
 def get_filtered_incidents(start_date, end_date, distrito, causa):
     """Construye y ejecuta una query de Flux dinámica basada en los filtros."""
@@ -71,13 +78,8 @@ def get_filtered_incidents(start_date, end_date, distrito, causa):
         for incident in incidents_data:
             incident['fecha_inicio_fmt'] = incident['_time'].strftime('%d/%m/%Y')
             incident['hora_inicio_fmt'] = incident['_time'].strftime('%H:%M:%S')
-            fecha_fin_str = incident.get('fecha_fin', '')
-            try:
-                dt_obj = datetime.strptime(fecha_fin_str, '%Y-%m-%d %H:%M:%S')
-                incident['fecha_fin_fmt'] = dt_obj.strftime('%d/%m/%Y')
-                incident['hora_fin_fmt'] = dt_obj.strftime('%H:%M:%S')
-            except (ValueError, TypeError):
-                incident['fecha_fin_fmt'], incident['hora_fin_fmt'] = '', ''
+            incident['fecha_fin_fmt'] = incident.get('fecha_fin_fecha', '')
+            incident['hora_fin_fmt'] = incident.get('hora_fin', '')
             processed_incidents.append(incident)
     except Exception as e:
         print(f"Error al ejecutar la query de filtro: {e}")
@@ -92,10 +94,21 @@ def index():
     form_data = {}
     if request.method == 'POST':
         form_data = request.form
-        start_date = datetime.strptime(form_data.get('start_date'), '%Y-%m-%d') if form_data.get('start_date') else None
-        end_date = datetime.strptime(form_data.get('end_date'), '%Y-%m-%d') if form_data.get('end_date') else None
+
+        ### INICIO CAMBIO: conversión segura de fechas y fallback
+        start_date_str = form_data.get('start_date')
+        end_date_str = form_data.get('end_date')
+
+        start_date = datetime.strptime(start_date_str, '%Y-%m-%d') if start_date_str else None
+        end_date = datetime.strptime(end_date_str, '%Y-%m-%d') if end_date_str else None
+
+        if start_date and not end_date:
+            end_date = start_date + timedelta(days=1)
+        
         distrito = form_data.get('distrito')
         causa = form_data.get('causa')
+        if start_date and not end_date:
+            end_date = start_date + timedelta(days=1)
         incidents = get_filtered_incidents(start_date, end_date, distrito, causa)
     return render_template('index.html', name=current_user.name, incidents=incidents, distritos=distritos, causas=causas, available_dates=available_dates, form_data=form_data)
 
@@ -136,21 +149,46 @@ def download_xls():
     end_date = datetime.strptime(request.args.get('end_date'), '%Y-%m-%d') if request.args.get('end_date') else None
     distrito = request.args.get('distrito')
     causa = request.args.get('causa')
+
     incidents = get_filtered_incidents(start_date, end_date, distrito, causa)
+
     if not incidents:
         return "No hay datos para descargar con los filtros seleccionados.", 404
+
     df = pd.DataFrame(incidents)
+
     df_export = pd.DataFrame({
-        'Nro. Incidencia': df['nro_incidencia'], 'Fecha de Inicio': df['fecha_inicio_fmt'], 'Hora de Inicio': df['hora_inicio_fmt'],
-        'Fecha de Fin': df['fecha_fin_fmt'], 'Hora de Fin': df['hora_fin_fmt'], 'Distrito': df['distrito'],
-        'Causa': df['descripcion_de_la_causa'], 'Reclamos': df['cantidad_de_reclamos']
+        'Nro. Incidencia': df.get('nro_incidencia', ''),
+        'Fecha de Inicio': df.get('fecha_inicio_fmt', ''),
+        'Hora de Inicio': df.get('hora_inicio_fmt', ''),
+        'Fecha de Fin': df.get('fecha_fin_fmt', ''),
+        'Hora de Fin': df.get('hora_fin_fmt', ''),
+        'Distrito': df.get('distrito', ''),
+        'Nivel de Tensión': df.get('nivel_tension', ''),
+        'Instalación': df.get('instalacion', ''),
+        'Localidad': df.get('localidad', ''),
+        'Distribuidor': df.get('distribuidor', ''),
+        'Causa': df.get('descripcion_de_la_causa', ''),
+        'Reclamos': df.get('cantidad_de_reclamos', ''),
+        'CT Involucrados': df.get('ct_involucrados', ''),
+        'Clientes Afectados': df.get('nises_involucrados', ''),
+        'Potencia Involucrada': df.get('potencia_involucrada', '')
     })
+
     output = io.BytesIO()
     writer = pd.ExcelWriter(output, engine='xlsxwriter')
     df_export.to_excel(writer, index=False, sheet_name='Incidencias')
-    writer.save()
+    writer.close()
     output.seek(0)
-    return send_file(output, mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', as_attachment=True, attachment_filename='reporte_incidencias.xlsx')
+
+    return send_file(
+        output,
+        mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        as_attachment=True,
+        download_name='reporte_incidencias.xlsx'
+    )
+
+
 
 @main.route('/admin')
 @login_required
