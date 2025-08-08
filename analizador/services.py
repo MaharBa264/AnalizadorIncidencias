@@ -7,6 +7,7 @@ from . import influx_client, INFLUXDB_ORG, INFLUXDB_BUCKET
 from influxdb_client import Point
 from influxdb_client.client.write_api import SYNCHRONOUS
 from datetime import datetime
+import pytz  # <<< NUEVO: para manejar zona horaria
 
 
 def to_int(value):
@@ -95,7 +96,26 @@ def process_file_to_influxdb(filepath):
                     .field("fecha_fin", str(getattr(row, "fecha_fin_fecha", ""))) \
                     .field("hora_fin", str(getattr(row, "fecha_fin_hora", ""))) \
                     .field("indice", i) \
-                    .time(datetime.utcnow())
+                    .time((lambda: (
+                        # --- Manejo de _time = fecha/hora REAL de inicio del incidente ---
+                        # Tomamos los strings normalizados por el pipeline previo:
+                        #   fecha_inicio_fecha: "DD-MM-YYYY"
+                        #   fecha_inicio_hora : "HH:MM:SS"
+                        # Convertimos a zona local America/Argentina/San_Luis y luego a UTC.
+                        (lambda fi_fecha, fi_hora: (
+                            (lambda dt_utc: dt_utc)(
+                                (lambda:
+                                    # Intento de parseo local → UTC
+                                    pytz.timezone("America/Argentina/San_Luis")
+                                        .localize(datetime.strptime(f"{fi_fecha} {fi_hora}", "%d-%m-%Y %H:%M:%S"))
+                                        .astimezone(pytz.utc)
+                                )() if (fi_fecha and fi_hora) else
+                                # Fallback si viniera vacío
+                                datetime.utcnow().replace(tzinfo=pytz.utc)
+                            )
+                        ))(str(getattr(row, "fecha_inicio_fecha", "")).strip(),
+                           str(getattr(row, "fecha_inicio_hora",  "")).strip())
+                    ))())
                 batch.append(point)
 
                 if len(batch) >= 500:

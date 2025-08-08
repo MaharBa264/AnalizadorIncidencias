@@ -5,6 +5,7 @@ import os
 import io
 import pandas as pd
 import threading
+import pytz
 from datetime import datetime, timedelta
 from flask import render_template, request, redirect, url_for, jsonify, current_app, send_file, flash
 from flask_login import login_required, current_user
@@ -67,17 +68,35 @@ def get_filtered_incidents(start_date, end_date, distrito, causa):
     processed_incidents = []
     try:
         query_api = influx_client.query_api()
-        query_parts = [
-            f'from(bucket: "{INFLUXDB_BUCKET}")',
-            '|> range(start: -5y)',
+        query_parts = [f'from(bucket: "{INFLUXDB_BUCKET}")']
+
+        # ---- Construcción de rango (local -03:00 → UTC) ----
+        if start_date or end_date:
+            ar_tz = pytz.timezone("America/Argentina/San_Luis")
+            if start_date:
+                sd_local = ar_tz.localize(datetime.combine(start_date.date(), datetime.min.time()))
+            else:
+                # muy atrás si no se especifica (ajustable)
+                sd_local = ar_tz.localize(datetime(2000, 1, 1, 0, 0, 0))
+
+            if end_date:
+                # fin de día 23:59:59
+                ed_local = ar_tz.localize(datetime.combine(end_date.date(), datetime.max.time().replace(microsecond=0)))
+            else:
+                today_local = ar_tz.localize(datetime.combine(datetime.now().date(), datetime.max.time().replace(microsecond=0)))
+                ed_local = today_local
+
+            sd_utc = sd_local.astimezone(pytz.utc).isoformat()
+            ed_utc = ed_local.astimezone(pytz.utc).isoformat()
+            query_parts.append(f'|> range(start: time(v: "{sd_utc}"), stop: time(v: "{ed_utc}"))')
+        else:
+            query_parts.append('|> range(start: -5y)')
+
+        # Medición y pivot
+        query_parts += [
             '|> filter(fn: (r) => r._measurement == "incidencia_electrica")',
             '|> pivot(rowKey:["_time"], columnKey: ["_field"], valueColumn: "_value")'
         ]
-        if start_date:
-            query_parts.append(f'|> filter(fn: (r) => r._time >= {start_date.isoformat()}Z)')
-        if end_date:
-            end_date_inclusive = end_date.replace(hour=23, minute=59, second=59)
-            query_parts.append(f'|> filter(fn: (r) => r._time <= {end_date_inclusive.isoformat()}Z)')
         if distrito:
             query_parts.append(f'|> filter(fn: (r) => r.distrito == "{distrito}")')
         if causa:
@@ -88,11 +107,11 @@ def get_filtered_incidents(start_date, end_date, distrito, causa):
         tables = query_api.query(query, org=INFLUXDB_ORG)
         incidents_data = [record.values for table in tables for record in table.records]
         for incident in incidents_data:
-            incident['fecha_inicio_fmt'] = incident['_time'].strftime('%d/%m/%Y')
-            incident['hora_inicio_fmt'] = incident['_time'].strftime('%H:%M:%S')
-            incident['fecha_fin_fmt'] = incident.get('fecha_fin_fecha', '')
-            incident['hora_fin_fmt'] = incident.get('hora_fin', '')
-            incident['hora_fin_fmt'] = incident.get('hora_fin', '')
+            # Ahora usamos los campos pivotados en lugar de _time
+            incident['fecha_inicio_fmt'] = incident.get('fecha_inicio', '')
+            incident['hora_inicio_fmt']  = incident.get('hora_inicio', '')
+            incident['fecha_fin_fmt']    = incident.get('fecha_fin', '')
+            incident['hora_fin_fmt']     = incident.get('hora_fin', '')
             processed_incidents.append(incident)
     except Exception as e:
         print(f"Error al ejecutar la query de filtro: {e}")
@@ -102,35 +121,82 @@ def get_filtered_incidents(start_date, end_date, distrito, causa):
 @login_required
 def index():
     distritos, causas = get_filter_options()
-    available_dates = get_available_dates()
     incidents = []
+    available_start_dates = []
+    available_end_dates   = []
     form_data = {}
-    if request.method == 'POST':
-        form_data = request.form
 
-        ### INICIO CAMBIO: conversión segura de fechas y fallback
-        start_date_str = form_data.get('start_date')
-        end_date_str = form_data.get('end_date')
+    # ———————————————————————————————
+    # 1) GET inicial: sólo cargos las fechas para los selects
+    # ———————————————————————————————
+    if request.method == 'GET':
+        # 1.1) Traigo todas las fechas únicas (YYYY-MM-DD) desde InfluxDB
+        raw_dates = get_available_dates()  
+        # 1.2) Convierto a datetime y ordeno
+        dates_dt = [datetime.strptime(d, "%Y-%m-%d") for d in raw_dates]
+        dates_dt.sort()
+        # 1.3) Formateo para mostrar en el <select> como DD-MM-YYYY
+        available_start_dates = [dt.strftime("%d-%m-%Y") for dt in dates_dt]
+        available_end_dates   = available_start_dates[:]
 
-        start_date = datetime.strptime(start_date_str, '%Y-%m-%d') if start_date_str else None
-        end_date = datetime.strptime(end_date_str, '%Y-%m-%d') if end_date_str else None
+    # ———————————————————————————————
+    # 2) POST con filtros: filtro, ordeno y reconstruyo los selects
+    # ———————————————————————————————
+    else:
+        form_data   = request.form
+        sd_str      = form_data.get('start_date', "")   # 'DD-MM-YYYY'
+        ed_str      = form_data.get('end_date', "")
+        distrito    = form_data.get('distrito')
+        causa       = form_data.get('causa')
 
-        if start_date and not end_date:
-            end_date = start_date + timedelta(days=1)
-        
-        distrito = form_data.get('distrito')
-        causa = form_data.get('causa')
-        if start_date and not end_date:
-            end_date = start_date + timedelta(days=1)
-        incidents = get_filtered_incidents(start_date, end_date, distrito, causa)
-    return render_template('index.html',
-                            name=current_user.name,
-                            incidents=incidents,
-                            available_dates=available_dates,
-                            form_data=form_data,
-                            distritos=distritos,  # ✅ USAR DATOS REALES
-                            causas=causas)
+        # 2.1) Parseo a datetime (Python 3.6 no necesita fromisoformat)
+        sd = datetime.strptime(sd_str, "%d-%m-%Y") if sd_str else None
+        ed = datetime.strptime(ed_str, "%d-%m-%Y") if ed_str else None
 
+        # 2.2) Si solo puso Fecha Desde, asumimos hasta fin de día siguiente
+        if sd and not ed:
+            ed = sd + timedelta(days=1)
+
+        # 2.3) Llamada real a InfluxDB con objetos datetime
+        incidents = get_filtered_incidents(sd, ed, distrito, causa)
+
+        # 2.4) Ordeno cronológicamente (fecha + hora)
+        incidents.sort(key=lambda inc: datetime.strptime(
+            f"{inc['fecha_inicio_fmt']} {inc['hora_inicio_fmt']}",
+            "%d-%m-%Y %H:%M:%S"
+        ))
+
+        # 2.5) Reconstruyo los selects de fechas según el resultado
+        #      Extraigo fechas únicas de los incidentes, las ordeno y formateo
+        dates_dt = sorted({
+            datetime.strptime(inc['fecha_inicio_fmt'], "%d-%m-%Y")
+            for inc in incidents
+        })
+        available_start_dates = [dt.strftime("%d-%m-%Y") for dt in dates_dt]
+
+        if sd:
+            # Fecha Hasta >= Fecha Desde
+            available_end_dates = [
+                dt.strftime("%d-%m-%Y")
+                for dt in dates_dt
+                if dt >= sd
+            ]
+        else:
+            available_end_dates = available_start_dates[:]
+
+    # ———————————————————————————————
+    # 3) Renderizado final
+    # ———————————————————————————————
+    return render_template(
+        'index.html',
+        name=current_user.name,
+        distritos=distritos,
+        causas=causas,
+        form_data=form_data,
+        incidents=incidents,
+        available_start_dates=available_start_dates,
+        available_end_dates=available_end_dates
+    )
 @main.route('/filtros_opciones')
 @login_required
 def filtros_opciones():

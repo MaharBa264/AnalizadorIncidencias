@@ -26,3 +26,4 @@ urllib3==1.26.20
 Werkzeug==2.0.3
 xlrd==2.0.2
 zipp==3.6.0
+pytz
