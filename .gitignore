@@ -21,3 +21,30 @@ build/
 .env
 
 uploads/
+
+# Flask instance (DBs/archivos locales con secretos)
+instance/
+instance/*
+
+# Bases SQLite y backups locales
+*.sqlite
+*.sqlite3
+*.db
+*.db-*
+*.bak
+*_backup*.*
+*.db-journal
+*.sqlite-journal
+
+# Logs y artefactos temporales
+logs/
+*.log
+*.tmp
+
+# Zips y dumps locales
+*.zip
+*.tar
+*.tar.gz
+
+# (Opcional) scripts locales que no quieras versionar
+scripts/local_*.py

@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block title %}Nuevo usuario{% endblock %}
+{% block content %}
+<div class="max-w-lg mx-auto bg-white p-6 rounded-xl shadow">
+  <h2 class="text-2xl font-bold mb-4">Nuevo usuario</h2>
+  <form method="POST">
+    {{ form.hidden_tag() }}
+    <div class="mb-3">{{ form.username.label() }} {{ form.username(class="mt-1 w-full border rounded p-2") }}</div>
+    <div class="mb-3">{{ form.email.label() }} {{ form.email(class="mt-1 w-full border rounded p-2") }}</div>
+    <div class="mb-3">{{ form.password.label() }} {{ form.password(class="mt-1 w-full border rounded p-2") }}</div>
+    <div class="mb-3">{{ form.role.label() }} {{ form.role(class="mt-1 w-full border rounded p-2") }}</div>
+    <div class="mb-3"><label class="inline-flex items-center">{{ form.is_active() }} <span class="ml-2">Activo</span></label></div>
+    {{ form.submit(class="px-4 py-2 rounded bg-blue-600 text-white") }}
+  </form>
+</div>
+{% endblock %}

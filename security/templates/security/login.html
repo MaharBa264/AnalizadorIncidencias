@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block title %}Ingresar{% endblock %}
+{% block content %}
+<div class="max-w-md mx-auto bg-white p-6 rounded-xl shadow">
+    <h2 class="text-2xl font-bold mb-4">Iniciar sesión</h2>
+    <form method="POST">
+        {{ form.hidden_tag() }}
+        <div class="mb-3">
+            {{ form.username.label(class="block text-sm font-medium text-gray-700") }}
+            {{ form.username(class="mt-1 block w-full border rounded p-2") }}
+        </div>
+        <div class="mb-3">
+            {{ form.password.label(class="block text-sm font-medium text-gray-700") }}
+            {{ form.password(class="mt-1 block w-full border rounded p-2") }}
+        </div>
+        <div class="mb-3">
+            <label class="inline-flex items-center">
+                {{ form.remember() }} <span class="ml-2">Recordarme</span>
+            </label>
+        </div>
+        <div class="flex items-center justify-between">
+            {{ form.submit(class="px-4 py-2 rounded bg-blue-600 text-white") }}
+            <a href="{{ url_for('security.reset_request') }}" class="text-sm text-blue-700">¿Olvidaste tu contraseña?</a>
+        </div>
+    </form>
+</div>
+{% endblock %}

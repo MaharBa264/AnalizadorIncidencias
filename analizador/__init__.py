@@ -7,12 +7,16 @@ from dotenv import load_dotenv
 from influxdb_client import InfluxDBClient
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import LoginManager
+from flask_mail import Mail
 
 # Cargar variables de entorno desde el archivo .env
 load_dotenv()
 
 # --- Base de Datos de Usuarios (SQLAlchemy) ---
 db = SQLAlchemy()
+
+# Mail para reset de contraseña
+mail = Mail()
 
 # --- Configuración de InfluxDB ---
 INFLUXDB_URL = os.getenv('INFLUXDB_URL')
@@ -21,7 +25,7 @@ INFLUXDB_ORG = os.getenv('INFLUXDB_ORG')
 INFLUXDB_BUCKET = os.getenv('INFLUXDB_BUCKET')
 
 # Cliente global de InfluxDB
-influx_client = InfluxDBClient(url=INFLUXDB_URL, token=INFLUXDB_TOKEN, org=INFLUXDB_ORG, timeout=30_000)
+influx_client = InfluxDBClient(url=INFLUXDB_URL, token=INFLUXDB_TOKEN, org=INFLUXDB_ORG, timeout=60_000, enable_gzip=True)
 
 def setup_influxdb():
     """Comprueba si el bucket de InfluxDB existe y lo crea si es necesario."""
@@ -41,6 +45,16 @@ def create_app():
     app = Flask(__name__)
     
     app.config['SECRET_KEY'] = 'clave_secreta_muy_segura_cambiar_en_produccion'
+    # Seguridad cookies
+    app.config['SESSION_COOKIE_HTTPONLY'] = True
+    app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
+    # Mail (leer de .env si existen)
+    app.config['MAIL_SERVER'] = os.getenv('MAIL_SERVER')
+    app.config['MAIL_PORT'] = int(os.getenv('MAIL_PORT', '587'))
+    app.config['MAIL_USE_TLS'] = os.getenv('MAIL_USE_TLS', 'true').lower()=='true'
+    app.config['MAIL_USERNAME'] = os.getenv('MAIL_USERNAME')
+    app.config['MAIL_PASSWORD'] = os.getenv('MAIL_PASSWORD')
+    app.config['MAIL_DEFAULT_SENDER'] = os.getenv('MAIL_DEFAULT_SENDER', 'no-reply@example.com')
     
     # Asegurarse de que la carpeta 'instance' exista para la base de datos SQLite
     try:
@@ -54,6 +68,9 @@ def create_app():
     app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
     
     db.init_app(app)
+
+    # Inicializar Mail
+    mail.init_app(app)
 
     # Configuración del gestor de sesiones de usuario
     login_manager = LoginManager()

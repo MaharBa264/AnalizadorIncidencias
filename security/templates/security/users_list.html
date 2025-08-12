@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block title %}Usuarios{% endblock %}
+{% block content %}
+<div class="bg-white p-6 rounded-xl shadow">
+  <div class="flex items-center justify-between mb-4">
+    <h2 class="text-2xl font-bold">Usuarios</h2>
+    <a href="{{ url_for('security.users_new') }}" class="px-4 py-2 rounded bg-blue-600 text-white">Nuevo</a>
+  </div>
+  <table class="min-w-full text-sm">
+    <thead><tr class="text-left border-b">
+      <th class="py-2 pr-4">ID</th>
+      <th class="py-2 pr-4">Usuario</th>
+      <th class="py-2 pr-4">Email</th>
+      <th class="py-2 pr-4">Rol</th>
+      <th class="py-2 pr-4">Activo</th>
+      <th class="py-2 pr-4">2FA</th>
+      <th class="py-2 pr-4">Acciones</th>
+    </tr></thead>
+    <tbody>
+    {% for u in users %}
+      <tr class="border-b">
+        <td class="py-2 pr-4">{{ u.id }}</td>
+        <td class="py-2 pr-4">{{ u.username }}</td>
+        <td class="py-2 pr-4">{{ u.email }}</td>
+        <td class="py-2 pr-4">{{ u.role }}</td>
+        <td class="py-2 pr-4">{{ "Sí" if u.is_active else "No" }}</td>
+        <td class="py-2 pr-4">{{ "Sí" if u.is_2fa_enabled else "No" }}</td>
+        <td class="py-2 pr-4">
+            <a class="text-blue-700" href="{{ url_for('security.users_edit', user_id=u.id) }}">Editar</a>
+            <form method="POST" action="{{ url_for('security.users_reset_password', user_id=u.id) }}" class="inline">
+                {{ csrf_token() }}
+                <button class="text-orange-700 ml-2">Clave temporal</button>
+            </form>
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

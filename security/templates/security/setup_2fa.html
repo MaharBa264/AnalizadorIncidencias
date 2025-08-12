@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block title %}Configurar 2FA{% endblock %}
+{% block content %}
+<div class="max-w-xl mx-auto bg-white p-6 rounded-xl shadow">
+    <h2 class="text-2xl font-bold mb-4">Autenticación en dos pasos (TOTP)</h2>
+    <p class="mb-4">Escaneá este QR con Google Authenticator, Authy u otro compatible:</p>
+    <img src="{{ data_uri }}" alt="QR 2FA" class="mb-4 border rounded p-2 mx-auto"/>
+    <p class="mb-2"><code>{{ otp_uri }}</code></p>
+    <hr class="my-4"/>
+    <form action="{{ url_for('security.enable_2fa') }}" method="POST" class="mb-4">
+        {{ csrf_token() }}
+        <label class="block text-sm font-medium text-gray-700 mb-2">Ingresá un código de tu app para habilitar:</label>
+        <input type="text" name="code" maxlength="6" class="mt-1 block w-full border rounded p-2 mb-2" placeholder="123456"/>
+        <button class="px-4 py-2 rounded bg-green-600 text-white">Habilitar 2FA</button>
+    </form>
+    {% if is_enabled %}
+    <form action="{{ url_for('security.disable_2fa') }}" method="POST">
+        {{ csrf_token() }}
+        <button class="px-4 py-2 rounded bg-red-600 text-white">Deshabilitar 2FA</button>
+    </form>
+    {% endif %}
+</div>
+{% endblock %}
