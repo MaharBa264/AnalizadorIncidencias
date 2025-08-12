@@ -10,22 +10,25 @@
         <div class="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-4 gap-4 items-end">
             <!-- Filtro Fecha Desde -->
             <div>
-                <label for="start_date" class="block text-sm font-medium text-gray-700">Fecha Desde</label>
+                <label for="start_date" class="block text-sm font-medium text-gray-700">Desde</label>
                 <select name="start_date" id="start_date" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm">
-                    <option value="">-- Todas --</option>
-                    {% for f in available_start_dates %}
-                        <option value="{{ f }}" {% if form_data.start_date == f %}selected{% endif %}>{{ f }}</option>
+                    <option value="">-- Seleccionar  --</option>
+                    {% for d in available_start_dates %}
+                        <option value="{{ d }}" {% if form_data.get('start_date','')==d %}selected{% endif %}>{{ d }}</option>
                     {% endfor %}
                 </select>
             </div>
             <!-- Filtro Fecha Hasta -->
             <div>
-                <label for="end_date" class="block text-sm font-medium text-gray-700">Fecha Hasta</label>
-                <select name="end_date" id="end_date" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm">
-                    <option value="">-- Todas --</option>
-                    {% for f in available_end_dates %}
-                        <option value="{{ f }}" {% if form_data.end_date == f %}selected{% endif %}>{{ f }}</option>
+                <label for="end_date" class="block text-sm font-medium text-gray-700">Hasta</label>
+                <select id="end_date" name="end_date" {% if not available_end_dates or available_end_dates|length == 0 %}disabled{% endif %}>
+                {% if available_end_dates %}
+                    {% for d in available_end_dates %}
+                    <option value="{{ d }}" {% if form_data.get('end_date','')==d %}selected{% endif %}>{{ d }}</option>
                     {% endfor %}
+                {% else %}
+                    <option value="">-- Seleccione 'Desde' --</option>
+                {% endif %}
                 </select>
             </div>
             <!-- Filtro Distrito -->
@@ -119,33 +122,52 @@
     </div>
 </div>
 
+{% endif %}
+
 <script>
-function actualizarFechasHasta() {
-    const startSelect = document.getElementById("start_date");
-    const endSelect = document.getElementById("end_date");
-    const selectedStart = startSelect.value;
+(function(){
+  const startSel = document.getElementById('start_date');
+  const endSel   = document.getElementById('end_date');
 
-    // Guardamos la opción seleccionada actual de fecha fin
-    const previousEnd = endSelect.value;
+  function resetEnd(msg) {
+    endSel.innerHTML = "";
+    const opt = document.createElement('option');
+    opt.value = "";
+    opt.textContent = msg || "-- Seleccione 'Desde' --";
+    endSel.appendChild(opt);
+    endSel.disabled = true;
+  }
 
-    // Guardamos todas las fechas desde el HTML
-    const allDates = [...startSelect.options].map(opt => opt.value).filter(v => v);
+  async function loadEndDates(fromDate) {
+    try {
+      const res = await fetch(`/api/end_dates?from=${encodeURIComponent(fromDate)}`, {cache:'no-store'});
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const data = await res.json();
+      const dates = Array.isArray(data.dates) ? data.dates : [];
+      endSel.innerHTML = "";
+      if (dates.length === 0) {
+        resetEnd("-- Sin fechas válidas --");
+        return;
+      }
+      for (const d of dates) {
+        const opt = document.createElement('option');
+        opt.value = d;
+        opt.textContent = d;
+        endSel.appendChild(opt);
+      }
+      endSel.disabled = false;
+    } catch (e) {
+      console.error(e);
+      resetEnd("-- Error cargando fechas --");
+    }
+  }
 
-    // Reconstruimos el select de Fecha Hasta
-    endSelect.innerHTML = '<option value="">-- Todas --</option>';
-    allDates.filter(f => !selectedStart || f >= selectedStart).forEach(f => {
-        const opt = document.createElement("option");
-        opt.value = f;
-        opt.textContent = f;
-        if (f === previousEnd) opt.selected = true;
-        endSelect.appendChild(opt);
-    });
-}
-
-// Inicializar en caso de que ya esté seleccionada una fecha de inicio
-document.addEventListener("DOMContentLoaded", () => {
-    actualizarFechasHasta();
-});
+  startSel.addEventListener('change', (ev) => {
+    const v = (ev.target.value || "").trim();
+    if (!v) { resetEnd(); return; }
+    loadEndDates(v);
+  });
+})();
 document.addEventListener("DOMContentLoaded", function () {
     fetch("/filtros_opciones")
         .then(res => res.json())
@@ -174,5 +196,4 @@ document.addEventListener("DOMContentLoaded", function () {
 });
 </script>
 
-{% endif %}
 {% endblock %}

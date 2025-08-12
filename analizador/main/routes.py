@@ -177,14 +177,18 @@ def get_filtered_incidents(start_date, end_date, distrito, causa):
 @main.route("/api/end_dates")
 @login_required
 def api_end_dates():
-    """Devuelve las fechas válidas para el combo 'Hasta' dado un 'Desde'."""
-    frm = request.args.get("from", "").strip()
-    d_from = _to_date_any(frm)
-    if d_from is None:
+    frm = (request.args.get("from") or "").strip()
+    d_from_dt = _parse_date_flexible(frm)
+    if d_from_dt is None:
         return jsonify({"dates": []})
-    raw_all = get_available_dates()  # strings
-    all_dt = sorted({ _to_date_any(d) for d in raw_all if _to_date_any(d) })
-    # Solo fechas >= desde
+    d_from = d_from_dt.date()
+
+    raw_all = get_available_dates()  # strings en distintos formatos
+    all_dt = sorted({
+        (_parse_date_flexible(d).date())
+        for d in raw_all
+        if _parse_date_flexible(d) is not None
+    })
     end_dates = [d.strftime("%d-%m-%Y") for d in all_dt if d >= d_from]
     return jsonify({"dates": end_dates})
 
@@ -194,12 +198,10 @@ def api_end_dates():
 def index():
     distritos, causas = get_filter_options()
     incidents = []
-    available_start_dates = []
-    available_end_dates = []
     form_data = {}
 
-    # Traer SIEMPRE todas las fechas disponibles para poblar "Desde"
-    raw_all_dates = get_available_dates()  # strings con fechas presentes en DB
+    # SIEMPRE: poblamos "Desde" con todas las fechas disponibles en DB
+    raw_all_dates = get_available_dates()
     all_dt = sorted({
         (_parse_date_flexible(d).date())
         for d in raw_all_dates
@@ -208,7 +210,7 @@ def index():
     available_start_dates = [dt.strftime("%d-%m-%Y") for dt in all_dt]
 
     if request.method == 'GET':
-        # Al cargar: "Hasta" vacío (el front puede deshabilitar el combo)
+        # Al cargar: "Hasta" vacío (el front lo deshabilita)
         available_end_dates = []
         return render_template(
             'index.html',
@@ -221,40 +223,23 @@ def index():
             available_end_dates=available_end_dates
         )
 
-    # ----- POST (filtrado) -----
+    # ----- POST -----
     form_data = request.form
     sd_str = (form_data.get('start_date') or "").strip()
     ed_str = (form_data.get('end_date') or "").strip()
     distrito = form_data.get('distrito')
-    causa = form_data.get('causa')
+    causa    = form_data.get('causa')
 
     sd = (_parse_date_flexible(sd_str).date() if _parse_date_flexible(sd_str) else None) if sd_str else None
     ed = (_parse_date_flexible(ed_str).date() if _parse_date_flexible(ed_str) else None) if ed_str else None
 
-    # Reglas solicitadas:
-    # - Si hay "Desde" y NO hay "Hasta": filtrar SOLO ese día (ed = sd)
-    # - Si hay ambos: validar ed >= sd
-    # - Si hay "Hasta" pero no "Desde": avisar y volver (no debería pasar por UI)
+    # Reglas:
+    # 1) Si hay "Desde" y NO hay "Hasta": solo ese día
     if sd and not ed:
         ed = sd
-    elif sd and ed:
-        if ed < sd:
-            flash("La fecha 'Hasta' no puede ser anterior a 'Desde'.", "warning")
-            # Reconstruir 'Hasta' en base a sd
-            available_end_dates = [d.strftime("%d-%m-%Y") for d in all_dt if d >= sd]
-            return render_template(
-                'index.html',
-                name=current_user.name,
-                distritos=distritos,
-                causas=causas,
-                form_data=form_data,
-                incidents=[],
-                available_start_dates=available_start_dates,
-                available_end_dates=available_end_dates
-            )
-    elif not sd and ed:
+    # 2) Si hay "Hasta" pero NO "Desde": error de UX
+    elif ed and not sd:
         flash("Seleccione primero la fecha 'Desde'.", "warning")
-        # "Hasta" vacío porque no hay 'Desde'
         available_end_dates = []
         return render_template(
             'index.html',
@@ -266,25 +251,33 @@ def index():
             available_start_dates=available_start_dates,
             available_end_dates=available_end_dates
         )
+    # 3) Si hay ambas: validar orden
+    elif sd and ed and ed < sd:
+        flash("La fecha 'Hasta' no puede ser anterior a 'Desde'.", "warning")
+        available_end_dates = [d.strftime("%d-%m-%Y") for d in all_dt if d >= sd]
+        return render_template(
+            'index.html',
+            name=current_user.name,
+            distritos=distritos,
+            causas=causas,
+            form_data=form_data,
+            incidents=[],
+            available_start_dates=available_start_dates,
+            available_end_dates=available_end_dates
+        )
+
+    # Armar las opciones de "Hasta":
+    available_end_dates = [d.strftime("%d-%m-%Y") for d in all_dt if (not sd or d >= sd)]
+
+    # **CASO NUEVO**: sin fechas pero con distrito/causa -> debe filtrar igual
+    if (not sd and not ed) and (distrito or causa):
+        incidents = get_filtered_incidents(None, None, distrito, causa)
+    # Fechas presentes (sd siempre asegura ed)
+    elif sd:
+        incidents = get_filtered_incidents(sd, ed, distrito, causa)
     else:
-        # Sin fechas: devolvemos la vista sin filtrar (comportamiento mínimo)
-        available_end_dates = []
-        return render_template(
-            'index.html',
-            name=current_user.name,
-            distritos=distritos,
-            causas=causas,
-            form_data=form_data,
-            incidents=[],
-            available_start_dates=available_start_dates,
-            available_end_dates=available_end_dates
-        )
-
-    # Con sd definido, "Hasta" debe listar SOLO fechas >= sd y existentes en DB
-    available_end_dates = [d.strftime("%d-%m-%Y") for d in all_dt if d >= sd]
-
-    # Ejecutar filtro (ahora ed SIEMPRE tiene valor si sd tiene valor)
-    incidents = get_filtered_incidents(sd, ed, distrito, causa)
+        # Sin fechas ni filtros: devolver vista básica
+        incidents = []
 
     # Orden cronológico robusto
     incidents.sort(key=lambda inc: _parse_datetime_flexible(
