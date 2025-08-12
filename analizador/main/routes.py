@@ -6,13 +6,77 @@ import io
 import pandas as pd
 import threading
 import pytz
-from datetime import datetime, timedelta
+from datetime import datetime, date, time, timedelta
 from flask import render_template, request, redirect, url_for, jsonify, current_app, send_file, flash
 from flask_login import login_required, current_user
 from . import main
 from .. import influx_client, INFLUXDB_ORG, INFLUXDB_BUCKET
 from ..services import process_file_to_influxdb
 from ..decorators import admin_required
+
+# =========================
+# Fechas y zona horaria
+# =========================
+TZ = pytz.timezone("America/Argentina/San_Luis")
+
+def _to_date_any(x):
+    if isinstance(x, datetime): return x.date()
+    if isinstance(x, date):     return x
+    s = str(x).strip() if x is not None else ""
+    for fmt in ("%d-%m-%Y", "%Y-%m-%d", "%d/%m/%Y"):
+        try:
+            return datetime.strptime(s, fmt).date()
+        except ValueError:
+            pass
+    try:
+        return datetime.fromisoformat(s).date()
+    except Exception:
+        return None
+
+def _day_range_local_to_utc(d):
+    start_local = TZ.localize(datetime.combine(d, time.min))
+    end_local   = TZ.localize(datetime.combine(d, time.max))
+    return start_local.astimezone(pytz.utc), end_local.astimezone(pytz.utc)
+
+def _as_date(x):
+    """Devuelve un date a partir de date|datetime|None, sin reventar."""
+    if x is None:
+        return None
+    return x.date() if isinstance(x, datetime) else x
+
+
+
+def _parse_date_flexible(s):
+    """Acepta DD-MM-YYYY o YYYY-MM-DD y devuelve datetime (sin TZ)."""
+    if not s:
+        return None
+    for fmt in ("%d-%m-%Y", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(s, fmt)
+        except Exception:
+            pass
+    return None  # si no matchea ninguno
+
+
+def _parse_datetime_flexible(date_str, time_str):
+    """Combina una fecha (flexible) y una hora (HH:MM[:SS]) en datetime.
+    Si no puede parsear, devuelve 1900-01-01 00:00:00 para no romper el sort.
+    """
+    d = _parse_date_flexible(date_str)
+    if d is None:
+        return datetime(1900, 1, 1)
+    h = (time_str or "00:00:00").strip()
+    t = None
+    for tfmt in ("%H:%M:%S", "%H:%M"):
+        try:
+            t = datetime.strptime(h, tfmt).time()
+            break
+        except Exception:
+            pass
+    if t is None:
+        t = datetime.min.time()
+    return datetime.combine(d, t)
+
 
 
 def get_filter_options():
@@ -72,19 +136,12 @@ def get_filtered_incidents(start_date, end_date, distrito, causa):
 
         # ---- Construcción de rango (local -03:00 → UTC) ----
         if start_date or end_date:
-            ar_tz = pytz.timezone("America/Argentina/San_Luis")
-            if start_date:
-                sd_local = ar_tz.localize(datetime.combine(start_date.date(), datetime.min.time()))
-            else:
-                # muy atrás si no se especifica (ajustable)
-                sd_local = ar_tz.localize(datetime(2000, 1, 1, 0, 0, 0))
-
-            if end_date:
-                # fin de día 23:59:59
-                ed_local = ar_tz.localize(datetime.combine(end_date.date(), datetime.max.time().replace(microsecond=0)))
-            else:
-                today_local = ar_tz.localize(datetime.combine(datetime.now().date(), datetime.max.time().replace(microsecond=0)))
-                ed_local = today_local
+            # Normalizar a date, admitiendo date o datetime
+            sd = _as_date(start_date) if start_date else date(2000, 1, 1)
+            ed = _as_date(end_date)   if end_date   else date.today()
+            # Día local completo → UTC
+            sd_local = TZ.localize(datetime.combine(sd, time.min))
+            ed_local = TZ.localize(datetime.combine(ed, time(23, 59, 59)))
 
             sd_utc = sd_local.astimezone(pytz.utc).isoformat()
             ed_utc = ed_local.astimezone(pytz.utc).isoformat()
@@ -117,76 +174,124 @@ def get_filtered_incidents(start_date, end_date, distrito, causa):
         print(f"Error al ejecutar la query de filtro: {e}")
     return processed_incidents
 
+@main.route("/api/end_dates")
+@login_required
+def api_end_dates():
+    """Devuelve las fechas válidas para el combo 'Hasta' dado un 'Desde'."""
+    frm = request.args.get("from", "").strip()
+    d_from = _to_date_any(frm)
+    if d_from is None:
+        return jsonify({"dates": []})
+    raw_all = get_available_dates()  # strings
+    all_dt = sorted({ _to_date_any(d) for d in raw_all if _to_date_any(d) })
+    # Solo fechas >= desde
+    end_dates = [d.strftime("%d-%m-%Y") for d in all_dt if d >= d_from]
+    return jsonify({"dates": end_dates})
+
+
 @main.route('/', methods=['GET', 'POST'])
 @login_required
 def index():
     distritos, causas = get_filter_options()
     incidents = []
     available_start_dates = []
-    available_end_dates   = []
+    available_end_dates = []
     form_data = {}
 
-    # ———————————————————————————————
-    # 1) GET inicial: sólo cargos las fechas para los selects
-    # ———————————————————————————————
+    # Traer SIEMPRE todas las fechas disponibles para poblar "Desde"
+    raw_all_dates = get_available_dates()  # strings con fechas presentes en DB
+    all_dt = sorted({
+        (_parse_date_flexible(d).date())
+        for d in raw_all_dates
+        if _parse_date_flexible(d) is not None
+    })
+    available_start_dates = [dt.strftime("%d-%m-%Y") for dt in all_dt]
+
     if request.method == 'GET':
-        # 1.1) Traigo todas las fechas únicas (YYYY-MM-DD) desde InfluxDB
-        raw_dates = get_available_dates()  
-        # 1.2) Convierto a datetime y ordeno
-        dates_dt = [datetime.strptime(d, "%Y-%m-%d") for d in raw_dates]
-        dates_dt.sort()
-        # 1.3) Formateo para mostrar en el <select> como DD-MM-YYYY
-        available_start_dates = [dt.strftime("%d-%m-%Y") for dt in dates_dt]
-        available_end_dates   = available_start_dates[:]
+        # Al cargar: "Hasta" vacío (el front puede deshabilitar el combo)
+        available_end_dates = []
+        return render_template(
+            'index.html',
+            name=current_user.name,
+            distritos=distritos,
+            causas=causas,
+            form_data=form_data,
+            incidents=incidents,
+            available_start_dates=available_start_dates,
+            available_end_dates=available_end_dates
+        )
 
-    # ———————————————————————————————
-    # 2) POST con filtros: filtro, ordeno y reconstruyo los selects
-    # ———————————————————————————————
+    # ----- POST (filtrado) -----
+    form_data = request.form
+    sd_str = (form_data.get('start_date') or "").strip()
+    ed_str = (form_data.get('end_date') or "").strip()
+    distrito = form_data.get('distrito')
+    causa = form_data.get('causa')
+
+    sd = (_parse_date_flexible(sd_str).date() if _parse_date_flexible(sd_str) else None) if sd_str else None
+    ed = (_parse_date_flexible(ed_str).date() if _parse_date_flexible(ed_str) else None) if ed_str else None
+
+    # Reglas solicitadas:
+    # - Si hay "Desde" y NO hay "Hasta": filtrar SOLO ese día (ed = sd)
+    # - Si hay ambos: validar ed >= sd
+    # - Si hay "Hasta" pero no "Desde": avisar y volver (no debería pasar por UI)
+    if sd and not ed:
+        ed = sd
+    elif sd and ed:
+        if ed < sd:
+            flash("La fecha 'Hasta' no puede ser anterior a 'Desde'.", "warning")
+            # Reconstruir 'Hasta' en base a sd
+            available_end_dates = [d.strftime("%d-%m-%Y") for d in all_dt if d >= sd]
+            return render_template(
+                'index.html',
+                name=current_user.name,
+                distritos=distritos,
+                causas=causas,
+                form_data=form_data,
+                incidents=[],
+                available_start_dates=available_start_dates,
+                available_end_dates=available_end_dates
+            )
+    elif not sd and ed:
+        flash("Seleccione primero la fecha 'Desde'.", "warning")
+        # "Hasta" vacío porque no hay 'Desde'
+        available_end_dates = []
+        return render_template(
+            'index.html',
+            name=current_user.name,
+            distritos=distritos,
+            causas=causas,
+            form_data=form_data,
+            incidents=[],
+            available_start_dates=available_start_dates,
+            available_end_dates=available_end_dates
+        )
     else:
-        form_data   = request.form
-        sd_str      = form_data.get('start_date', "")   # 'DD-MM-YYYY'
-        ed_str      = form_data.get('end_date', "")
-        distrito    = form_data.get('distrito')
-        causa       = form_data.get('causa')
+        # Sin fechas: devolvemos la vista sin filtrar (comportamiento mínimo)
+        available_end_dates = []
+        return render_template(
+            'index.html',
+            name=current_user.name,
+            distritos=distritos,
+            causas=causas,
+            form_data=form_data,
+            incidents=[],
+            available_start_dates=available_start_dates,
+            available_end_dates=available_end_dates
+        )
 
-        # 2.1) Parseo a datetime (Python 3.6 no necesita fromisoformat)
-        sd = datetime.strptime(sd_str, "%d-%m-%Y") if sd_str else None
-        ed = datetime.strptime(ed_str, "%d-%m-%Y") if ed_str else None
+    # Con sd definido, "Hasta" debe listar SOLO fechas >= sd y existentes en DB
+    available_end_dates = [d.strftime("%d-%m-%Y") for d in all_dt if d >= sd]
 
-        # 2.2) Si solo puso Fecha Desde, asumimos hasta fin de día siguiente
-        if sd and not ed:
-            ed = sd + timedelta(days=1)
+    # Ejecutar filtro (ahora ed SIEMPRE tiene valor si sd tiene valor)
+    incidents = get_filtered_incidents(sd, ed, distrito, causa)
 
-        # 2.3) Llamada real a InfluxDB con objetos datetime
-        incidents = get_filtered_incidents(sd, ed, distrito, causa)
+    # Orden cronológico robusto
+    incidents.sort(key=lambda inc: _parse_datetime_flexible(
+        inc.get('fecha_inicio_fmt', '01-01-1900'),
+        inc.get('hora_inicio_fmt', '00:00:00')
+    ))
 
-        # 2.4) Ordeno cronológicamente (fecha + hora)
-        incidents.sort(key=lambda inc: datetime.strptime(
-            f"{inc['fecha_inicio_fmt']} {inc['hora_inicio_fmt']}",
-            "%d-%m-%Y %H:%M:%S"
-        ))
-
-        # 2.5) Reconstruyo los selects de fechas según el resultado
-        #      Extraigo fechas únicas de los incidentes, las ordeno y formateo
-        dates_dt = sorted({
-            datetime.strptime(inc['fecha_inicio_fmt'], "%d-%m-%Y")
-            for inc in incidents
-        })
-        available_start_dates = [dt.strftime("%d-%m-%Y") for dt in dates_dt]
-
-        if sd:
-            # Fecha Hasta >= Fecha Desde
-            available_end_dates = [
-                dt.strftime("%d-%m-%Y")
-                for dt in dates_dt
-                if dt >= sd
-            ]
-        else:
-            available_end_dates = available_start_dates[:]
-
-    # ———————————————————————————————
-    # 3) Renderizado final
-    # ———————————————————————————————
     return render_template(
         'index.html',
         name=current_user.name,
@@ -197,11 +302,6 @@ def index():
         available_start_dates=available_start_dates,
         available_end_dates=available_end_dates
     )
-@main.route('/filtros_opciones')
-@login_required
-def filtros_opciones():
-    distritos, causas = get_filter_options()
-    return jsonify({'distritos': distritos, 'causas': causas})
 
 
 @main.route('/upload_page')
@@ -237,8 +337,11 @@ def upload_file():
 @main.route('/download_xls')
 @login_required
 def download_xls():
-    start_date = datetime.strptime(request.args.get('start_date'), '%Y-%m-%d') if request.args.get('start_date') else None
-    end_date = datetime.strptime(request.args.get('end_date'), '%Y-%m-%d') if request.args.get('end_date') else None
+    # _parse_date_flexible devuelve datetime; lo pasamos a date para ser coherentes
+    start_dt = _parse_date_flexible(request.args.get('start_date'))
+    end_dt   = _parse_date_flexible(request.args.get('end_date'))
+    start_date = start_dt.date() if start_dt else None
+    end_date   = end_dt.date()   if end_dt   else None
     distrito = request.args.get('distrito')
     causa = request.args.get('causa')
 
