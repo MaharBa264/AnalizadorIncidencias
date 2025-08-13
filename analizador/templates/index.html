@@ -21,7 +21,7 @@
             <!-- Filtro Fecha Hasta -->
             <div>
                 <label for="end_date" class="block text-sm font-medium text-gray-700">Hasta</label>
-                <select id="end_date" name="end_date" {% if not available_end_dates or available_end_dates|length == 0 %}disabled{% endif %}>
+                <select id="end_date" name="end_date" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm" {% if not available_end_dates or available_end_dates|length == 0 %}disabled{% endif %}>
                 {% if available_end_dates %}
                     {% for d in available_end_dates %}
                     <option value="{{ d }}" {% if form_data.get('end_date','')==d %}selected{% endif %}>{{ d }}</option>
@@ -41,6 +41,15 @@
                     {% endfor %}
                 </select>
             </div>
+            <!-- Filtro Nivel de Tensión -->
+            <div>
+                <label for="nivel_tension" class="block text-sm font-medium text-gray-700">Nivel de Tensión</label>
+                <select name="nivel_tension" id="nivel_tension" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm">
+                    <option value="">Todos</option>
+                    <option value="BT" {% if form_data.get('nivel_tension','')=='BT' %}selected{% endif %}>BT</option>
+                    <option value="MT" {% if form_data.get('nivel_tension','')=='MT' %}selected{% endif %}>MT</option>
+                </select>
+            </div>
             <!-- Filtro Causa -->
             <div class="lg:col-span-2">
                 <label for="causa" class="block text-sm font-medium text-gray-700">Causa</label>
@@ -51,6 +60,19 @@
                     {% endfor %}
                 </select>
             </div>
+
+            <!-- Acciones -->
+            <div class="flex items-center space-x-6 md:col-span-2 lg:col-span-2">
+            <label class="inline-flex items-center space-x-2">
+                <input type="checkbox" id="traer_tabla" name="traer_tabla" class="rounded" {% if form_data.get('traer_tabla') %}checked{% endif %}>
+                <span>Traer tabla</span>
+            </label>
+            <label class="inline-flex items-center space-x-2">
+                <input type="checkbox" id="graficar" name="graficar" class="rounded" {% if form_data.get('graficar') %}checked{% endif %}>
+                <span>Graficar</span>
+            </label>
+            </div>
+
             <!-- Botón de Filtrar -->
             <div class="md:col-start-4 lg:col-start-4">
                 <button type="submit" class="w-full bg-blue-600 text-white font-bold py-2 px-4 rounded-lg hover:bg-blue-700 transition duration-300">Filtrar</button>
@@ -58,6 +80,20 @@
         </div>
     </form>
 </div>
+
+
+{% if incidents and total_duration_str %}
+<div class="bg-indigo-50 border border-indigo-200 text-indigo-900 rounded-xl p-4 mb-4">
+  <div class="flex items-center justify-between">
+    <div>
+      <h3 class="text-lg font-semibold">Resumen</h3>
+      <p class="text-sm">Tiempo total acumulado (Fin − Inicio) de los incidentes filtrados.</p>
+    </div>
+    <div class="text-xl font-bold">{{ total_duration_str }}</div>
+  </div>
+</div>
+{% endif %}
+
 
 <!-- Sección de Resultados -->
 {% if incidents %}
@@ -194,6 +230,30 @@ document.addEventListener("DOMContentLoaded", function () {
             });
         });
 });
+(function(){
+    const form = document.querySelector('form[action*="{{ url_for('main.index') }}"]') || document.querySelector('form');
+    const cbTabla = document.getElementById('traer_tabla');
+    const cbGraf  = document.getElementById('graficar');
+
+    function exclusive(e){
+      if(e.target.checked){
+        if(e.target === cbTabla) cbGraf.checked = false; else cbTabla.checked = false;
+      }
+    }
+    cbTabla && cbTabla.addEventListener('change', exclusive);
+    cbGraf  && cbGraf.addEventListener('change', exclusive);
+
+    form && form.addEventListener('submit', function(){
+      // Si el usuario selecciona “Graficar”, enviamos al endpoint de gráficos
+      if (cbGraf && cbGraf.checked) {
+        form.action = "{{ url_for('main.graficos') }}";
+        form.method = 'GET'; // enviamos filtros vía querystring
+      } else {
+        form.action = "{{ url_for('main.index') }}";
+        form.method = 'POST';
+      }
+    });
+  })();
 </script>
 
 {% endblock %}

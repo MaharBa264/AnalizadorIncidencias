@@ -127,7 +127,7 @@ def get_available_dates():
     return sorted(dates)
 
 
-def get_filtered_incidents(start_date, end_date, distrito, causa):
+def get_filtered_incidents(start_date, end_date, distrito, causa, nivel_tension=None):
     """Construye y ejecuta una query de Flux dinámica basada en los filtros."""
     processed_incidents = []
     try:
@@ -135,36 +135,45 @@ def get_filtered_incidents(start_date, end_date, distrito, causa):
         query_parts = [f'from(bucket: "{INFLUXDB_BUCKET}")']
 
         # ---- Construcción de rango (local -03:00 → UTC) ----
-        if start_date or end_date:
-            # Normalizar a date, admitiendo date o datetime
-            sd = _as_date(start_date) if start_date else date(2000, 1, 1)
-            ed = _as_date(end_date)   if end_date   else date.today()
-            # Día local completo → UTC
-            sd_local = TZ.localize(datetime.combine(sd, time.min))
-            ed_local = TZ.localize(datetime.combine(ed, time(23, 59, 59)))
+        if start_date:
+            effective_end = end_date or start_date  # si no hay "Hasta", usamos el mismo día
+            # 00:00 local del día inicio  → UTC
+            start_local = TZ.localize(datetime.combine(start_date, time(0, 0, 0)))
+            # 00:00 local del día siguiente a "effective_end" (stop exclusivo) → UTC
+            stop_local  = TZ.localize(datetime.combine(effective_end, time(0, 0, 0))) + timedelta(days=1)
 
-            sd_utc = sd_local.astimezone(pytz.utc).isoformat()
-            ed_utc = ed_local.astimezone(pytz.utc).isoformat()
-            query_parts.append(f'|> range(start: time(v: "{sd_utc}"), stop: time(v: "{ed_utc}"))')
+            start_utc = start_local.astimezone(pytz.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+            stop_utc  = stop_local.astimezone(pytz.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+
+            query_parts.append(f'|> range(start: {start_utc}, stop: {stop_utc})')
         else:
+            # Rango amplio por defecto (evita unbounded read)
             query_parts.append('|> range(start: -5y)')
 
-        # Medición y pivot
+        # Medición y pivot (igual que ahora)
         query_parts += [
             '|> filter(fn: (r) => r._measurement == "incidencia_electrica")',
             '|> pivot(rowKey:["_time"], columnKey: ["_field"], valueColumn: "_value")'
         ]
+
+        # Filtros existentes
         if distrito:
             query_parts.append(f'|> filter(fn: (r) => r.distrito == "{distrito}")')
         if causa:
             causa_escaped = causa.replace('\\', '\\\\').replace('"', '\\"')
             query_parts.append(f'|> filter(fn: (r) => r.descripcion_de_la_causa == "{causa_escaped}")')
+
+        # 🆕 Filtro de nivel de tensión
+        if nivel_tension in ("BT", "MT"):
+            query_parts.append(f'|> filter(fn: (r) => r.nivel_tension == "{nivel_tension}")')
+
         query_parts.append('|> sort(columns: ["_time"], desc: true)')
         query = "\n".join(query_parts)
+
         tables = query_api.query(query, org=INFLUXDB_ORG)
         incidents_data = [record.values for table in tables for record in table.records]
         for incident in incidents_data:
-            # Ahora usamos los campos pivotados en lugar de _time
+            # Normalización para mostrar (tu lógica actual)
             incident['fecha_inicio_fmt'] = incident.get('fecha_inicio', '')
             incident['hora_inicio_fmt']  = incident.get('hora_inicio', '')
             incident['fecha_fin_fmt']    = incident.get('fecha_fin', '')
@@ -173,6 +182,37 @@ def get_filtered_incidents(start_date, end_date, distrito, causa):
     except Exception as e:
         print(f"Error al ejecutar la query de filtro: {e}")
     return processed_incidents
+
+def compute_total_duration(incidents):
+    """Suma el tiempo (fin - inicio) de cada incidente.
+    Devuelve (string_legible, total_minutos)."""
+    total = timedelta(0)
+    for inc in incidents:
+        # Usamos *_fmt si existen; si no, tomamos los originales
+        f_ini = inc.get('fecha_inicio_fmt') or inc.get('fecha_inicio')
+        h_ini = inc.get('hora_inicio_fmt')  or inc.get('hora_inicio')
+        f_fin = inc.get('fecha_fin_fmt')    or inc.get('fecha_fin')
+        h_fin = inc.get('hora_fin_fmt')     or inc.get('hora_fin')
+
+        sd = _parse_datetime_flexible(f_ini, h_ini)
+        ed = _parse_datetime_flexible(f_fin, h_fin)
+        if ed >= sd:
+            total += (ed - sd)
+
+    total_seconds = int(total.total_seconds())
+    minutes = (total_seconds // 60) % 60
+    hours   = (total_seconds // 3600) % 24
+    days    =  total_seconds // (24 * 3600)
+
+    parts = []
+    if days:
+        parts.append(f"{days} días")
+    if hours:
+        parts.append(f"{hours} h")
+    # Mostrar minutos aunque todo sea 0
+    parts.append(f"{minutes} min")
+
+    return " ".join(parts), (total_seconds // 60)
 
 @main.route("/api/end_dates")
 @login_required
@@ -200,18 +240,12 @@ def index():
     incidents = []
     form_data = {}
 
-    # SIEMPRE: poblamos "Desde" con todas las fechas disponibles en DB
+    # Fechas disponibles (siempre cargar "Desde")
     raw_all_dates = get_available_dates()
-    all_dt = sorted({
-        (_parse_date_flexible(d).date())
-        for d in raw_all_dates
-        if _parse_date_flexible(d) is not None
-    })
+    all_dt = sorted({(_parse_date_flexible(d).date()) for d in raw_all_dates if _parse_date_flexible(d) is not None})
     available_start_dates = [dt.strftime("%d-%m-%Y") for dt in all_dt]
 
     if request.method == 'GET':
-        # Al cargar: "Hasta" vacío (el front lo deshabilita)
-        available_end_dates = []
         return render_template(
             'index.html',
             name=current_user.name,
@@ -220,70 +254,94 @@ def index():
             form_data=form_data,
             incidents=incidents,
             available_start_dates=available_start_dates,
-            available_end_dates=available_end_dates
+            available_end_dates=[],
+            total_duration_str=None,
+            total_duration_minutes=None,
         )
 
-    # ----- POST -----
-    form_data = request.form
-    sd_str = (form_data.get('start_date') or "").strip()
-    ed_str = (form_data.get('end_date') or "").strip()
-    distrito = form_data.get('distrito')
-    causa    = form_data.get('causa')
+    # POST
+    sd = _parse_date_flexible(request.form.get('start_date'))
+    ed = _parse_date_flexible(request.form.get('end_date'))
+    start_date = sd.date() if sd else None
+    end_date   = ed.date() if ed else None
 
-    sd = (_parse_date_flexible(sd_str).date() if _parse_date_flexible(sd_str) else None) if sd_str else None
-    ed = (_parse_date_flexible(ed_str).date() if _parse_date_flexible(ed_str) else None) if ed_str else None
+    distrito       = (request.form.get('distrito') or '').strip() or None
+    causa          = (request.form.get('causa') or '').strip() or None
+    nivel_tension  = (request.form.get('nivel_tension') or '').strip() or None  # 🆕
 
-    # Reglas:
-    # 1) Si hay "Desde" y NO hay "Hasta": solo ese día
-    if sd and not ed:
-        ed = sd
-    # 2) Si hay "Hasta" pero NO "Desde": error de UX
-    elif ed and not sd:
+    traer_tabla = bool(request.form.get('traer_tabla'))  # 🆕
+    graficar    = bool(request.form.get('graficar'))     # 🆕
+
+    # Guardar estado del formulario
+    form_data.update({
+        'start_date': request.form.get('start_date') or '',
+        'end_date':   request.form.get('end_date') or '',
+        'distrito':   distrito or '',
+        'causa':      causa or '',
+        'nivel_tension': nivel_tension or '',
+        'traer_tabla': traer_tabla,
+        'graficar': graficar,
+    })
+
+    # Validaciones de fechas (misma lógica que tenías)
+    if end_date and not start_date:
         flash("Seleccione primero la fecha 'Desde'.", "warning")
-        available_end_dates = []
-        return render_template(
-            'index.html',
-            name=current_user.name,
-            distritos=distritos,
-            causas=causas,
-            form_data=form_data,
-            incidents=[],
-            available_start_dates=available_start_dates,
-            available_end_dates=available_end_dates
-        )
-    # 3) Si hay ambas: validar orden
-    elif sd and ed and ed < sd:
+        return render_template('index.html', name=current_user.name, distritos=distritos, causas=causas,
+                               form_data=form_data, incidents=[],
+                               available_start_dates=available_start_dates,
+                               available_end_dates=[],
+                               total_duration_str=None, total_duration_minutes=None)
+
+    if start_date and end_date and end_date < start_date:
         flash("La fecha 'Hasta' no puede ser anterior a 'Desde'.", "warning")
-        available_end_dates = [d.strftime("%d-%m-%Y") for d in all_dt if d >= sd]
-        return render_template(
-            'index.html',
-            name=current_user.name,
-            distritos=distritos,
-            causas=causas,
-            form_data=form_data,
-            incidents=[],
-            available_start_dates=available_start_dates,
-            available_end_dates=available_end_dates
-        )
+        available_end_dates = [d.strftime("%d-%m-%Y") for d in all_dt if d >= start_date]
+        return render_template('index.html', name=current_user.name, distritos=distritos, causas=causas,
+                               form_data=form_data, incidents=[],
+                               available_start_dates=available_start_dates,
+                               available_end_dates=available_end_dates,
+                               total_duration_str=None, total_duration_minutes=None)
 
-    # Armar las opciones de "Hasta":
-    available_end_dates = [d.strftime("%d-%m-%Y") for d in all_dt if (not sd or d >= sd)]
+    # Armar "Hasta" a partir de "Desde"
+    available_end_dates = [d.strftime("%d-%m-%Y") for d in all_dt if (not start_date or d >= start_date)]
 
-    # **CASO NUEVO**: sin fechas pero con distrito/causa -> debe filtrar igual
-    if (not sd and not ed) and (distrito or causa):
-        incidents = get_filtered_incidents(None, None, distrito, causa)
-    # Fechas presentes (sd siempre asegura ed)
-    elif sd:
-        incidents = get_filtered_incidents(sd, ed, distrito, causa)
+    # Exclusividad de checkboxes
+    if traer_tabla and graficar:
+        flash("No se pueden seleccionar 'Traer tabla' y 'Graficar' al mismo tiempo.", "warning")
+        return render_template('index.html', name=current_user.name, distritos=distritos, causas=causas,
+                               form_data=form_data, incidents=[],
+                               available_start_dates=available_start_dates,
+                               available_end_dates=available_end_dates,
+                               total_duration_str=None, total_duration_minutes=None)
+
+    # Si el usuario eligió 'Graficar' -> ir a la página de gráficos con los filtros como querystring
+    if graficar:
+        params = {
+            'start_date': form_data['start_date'],
+            'end_date':   form_data['end_date'],
+            'distrito':   form_data['distrito'],
+            'causa':      form_data['causa'],
+            'nivel_tension': form_data['nivel_tension'],
+        }
+        return redirect(url_for('main.graficos', **params))
+
+    # Caso "Traer tabla" (o ninguno marcado: por defecto tabla)
+    if (not start_date and not end_date) and (distrito or causa or nivel_tension):
+        incidents = get_filtered_incidents(None, None, distrito, causa, nivel_tension)
+    elif start_date:
+        effective_end = end_date or start_date
+        incidents = get_filtered_incidents(start_date, effective_end, distrito, causa, nivel_tension)
     else:
-        # Sin fechas ni filtros: devolver vista básica
         incidents = []
 
     # Orden cronológico robusto
     incidents.sort(key=lambda inc: _parse_datetime_flexible(
-        inc.get('fecha_inicio_fmt', '01-01-1900'),
-        inc.get('hora_inicio_fmt', '00:00:00')
+        inc.get('fecha_inicio_fmt', '01-01-1900'), inc.get('hora_inicio_fmt', '00:00:00')
     ))
+
+    # Resumen de tiempos acumulados
+    total_duration_str, total_duration_minutes = (None, None)
+    if incidents:
+        total_duration_str, total_duration_minutes = compute_total_duration(incidents)
 
     return render_template(
         'index.html',
@@ -293,9 +351,10 @@ def index():
         form_data=form_data,
         incidents=incidents,
         available_start_dates=available_start_dates,
-        available_end_dates=available_end_dates
+        available_end_dates=available_end_dates,
+        total_duration_str=total_duration_str,
+        total_duration_minutes=total_duration_minutes,
     )
-
 
 @main.route('/upload_page')
 @login_required
@@ -337,8 +396,9 @@ def download_xls():
     end_date   = end_dt.date()   if end_dt   else None
     distrito = request.args.get('distrito')
     causa = request.args.get('causa')
+    nivel_tension = request.args.get('nivel_tension')
 
-    incidents = get_filtered_incidents(start_date, end_date, distrito, causa)
+    incidents = get_filtered_incidents(start_date, end_date, distrito, causa, nivel_tension)
 
     if not incidents:
         return "No hay datos para descargar con los filtros seleccionados.", 404
@@ -376,6 +436,32 @@ def download_xls():
         download_name='reporte_incidencias.xlsx'
     )
 
+@main.route('/filtros_opciones', methods=['GET'])
+@login_required
+def filtros_opciones():
+    try:
+        distritos, causas = get_filter_options()  # usa tu helper actual
+    except Exception:
+        distritos, causas = [], []
+    # Nivel de tensión lo acotamos a las dos opciones pedidas
+    return jsonify({
+        'distritos': distritos,
+        'causas': causas,
+        'nivel_tension': ['BT', 'MT']
+    })
+
+@main.route('/graficos', methods=['GET'])
+@login_required
+def graficos():
+    # Leemos filtros por querystring
+    form_data = {
+        'start_date': (request.args.get('start_date') or '').strip(),
+        'end_date':   (request.args.get('end_date') or '').strip(),
+        'distrito':   (request.args.get('distrito') or '').strip(),
+        'causa':      (request.args.get('causa') or '').strip(),
+        'nivel_tension': (request.args.get('nivel_tension') or '').strip(),
+    }
+    return render_template('graficos.html', name=current_user.name, form_data=form_data)
 
 
 @main.route('/admin')
