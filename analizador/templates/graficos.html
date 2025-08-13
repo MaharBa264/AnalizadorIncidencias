@@ -51,7 +51,19 @@
       <div id="chart_g4" style="height: 360px;"></div>
     </div>
     <div class="p-4 rounded-xl border bg-white">
-      <div class="text-lg font-semibold mb-2">G6 · Heatmap Hora × Día (minutos)</div>
+      <div class="flex items-center justify-between mb-2">
+        <div class="text-lg font-semibold">G6 · Heatmap Hora × Día</div>
+        <div class="flex items-center gap-3 text-sm">
+          <label class="inline-flex items-center gap-1">
+            <input type="radio" name="g6metric" value="minutos" checked>
+            <span>Minutos</span>
+          </label>
+          <label class="inline-flex items-center gap-1">
+            <input type="radio" name="g6metric" value="incidencias">
+            <span>Incidencias</span>
+          </label>
+        </div>
+      </div>
       <div id="chart_g6" style="height: 380px;"></div>
     </div>
     <div class="p-4 rounded-xl border bg-white">
@@ -176,11 +188,15 @@
   fetch(`/api/graficos/pareto_causas?metric=minutos&${q.toString()}`).then(r=>r.json()).then(d=>{
     g4.setOption({ xAxis: [{ data: d.categories }], series: [ {data:d.values}, {data:d.acumulada_pct} ] });
   });
-   // G6 — Heatmap hora×día
+// G6 — Heatmap hora×día con switch de métrica
+  const g6metricRadios = Array.from(document.querySelectorAll('input[name="g6metric"]'));
+  let g6Metric = 'minutos';
+
   g6.setOption({
     tooltip: { position: 'top', formatter: (p)=>{
       const v = p.data && p.data[2] || 0;
-      return `${p.marker} ${p.name}<br/>Valor: ${Intl.NumberFormat('es-AR', {maximumFractionDigits:2}).format(v)}`;
+      const label = (g6Metric === 'incidencias') ? 'Incidencias' : 'Minutos';
+      return `${p.marker} ${p.name}<br/>${label}: ${Intl.NumberFormat('es-AR', {maximumFractionDigits:2}).format(v)}`;
     }},
     grid: { height: '70%', top: 40 },
     toolbox: { feature: { saveAsImage: {} } },
@@ -213,26 +229,41 @@
     }]
   });
 
-  fetch(`/api/graficos/heatmap_horadia?${q.toString()}`)
-    .then(r=>r.json())
-    .then(d=>{
-      g6.setOption({
-        yAxis: { data: d.weekdays },
-        series: [{ data: d.data }],
-        visualMap: { max: Math.max(1, d.max) }
+  function loadG6(){
+    const qq = new URLSearchParams(q.toString());
+    qq.set('metric', g6Metric);
+    fetch(`/api/graficos/heatmap_horadia?${qq.toString()}`)
+      .then(r=>r.json())
+      .then(d=>{
+        g6.setOption({
+          yAxis: { data: d.weekdays },
+          series: [{ data: d.data }],
+          visualMap: { max: Math.max(1, d.max) }
+        });
       });
-    });
-      // G12 — Histograma de duración (Total/BT/MT)
+  }
+
+  // listeners del switch
+  g6metricRadios.forEach(r=> r.addEventListener('change', (e)=>{
+    g6Metric = e.target.value;
+    loadG6();
+  }));
+
+  // carga inicial
+  loadG6();
+  
+  // G12 — Histograma de duración apilado (BT/MT) + línea Total
+
   g12.setOption({
     tooltip: { trigger: 'axis' },
     toolbox: { feature: { saveAsImage: {} } },
-    legend: { data: ['Total','BT','MT'] },
+    legend: { data: ['BT','MT','Total'] },
     xAxis: { type: 'category', data: [] },
     yAxis: { type: 'value', name: 'Incidencias' },
     series: [
-      { name: 'Total', type: 'bar', data: [] },
-      { name: 'BT', type: 'bar', data: [] },
-      { name: 'MT', type: 'bar', data: [] }
+      { name: 'BT', type: 'bar', stack: 'niveles', data: [] },
+      { name: 'MT', type: 'bar', stack: 'niveles', data: [] },
+      { name: 'Total', type: 'line', data: [] }
     ]
   });
 
@@ -241,7 +272,7 @@
     .then(d=>{
       g12.setOption({
         xAxis: { data: d.categories },
-        series: [ {data: d.total}, {data: d.BT}, {data: d.MT} ]
+        series: [ {data: d.BT}, {data: d.MT}, {data: d.total} ]
       });
     });
 })();
