@@ -3,8 +3,7 @@
 {% block content %}
 <div class="bg-white p-6 rounded-xl shadow-md mb-8">
   <h2 class="text-2xl font-bold mb-2">Visualización de Incidencias</h2>
-  <p class="text-sm text-gray-600">(Próxima etapa: gráficos dinámicos).</p>
-
+  <p class="text-sm text-gray-600">Filtros activos.</p>
   <div class="mt-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
     <div class="p-3 rounded-lg bg-gray-50 border"><strong>Desde:</strong> {{ form_data.start_date or '—' }}</div>
     <div class="p-3 rounded-lg bg-gray-50 border"><strong>Hasta:</strong> {{ form_data.end_date or '—' }}</div>
@@ -13,12 +12,238 @@
     <div class="p-3 rounded-lg bg-gray-50 border"><strong>Nivel de Tensión:</strong> {{ form_data.nivel_tension or 'Todos' }}</div>
   </div>
 
-  <div class="mt-8 p-6 rounded-xl border-2 border-dashed">
-    <p class="text-gray-600">Aquí vamos a renderizar gráficos (líneas, barras, etc.) según los filtros aplicados.</p>
+  <!-- KPI Cards -->
+  <div class="mt-6 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+    <div class="p-4 rounded-xl bg-indigo-600 text-white shadow" id="kpi_incidencias">
+      <div class="text-sm opacity-80">Incidencias</div>
+      <div class="text-3xl font-bold">—</div>
+    </div>
+    <div class="p-4 rounded-xl bg-emerald-600 text-white shadow" id="kpi_minutos">
+      <div class="text-sm opacity-80">Minutos totales</div>
+      <div class="text-3xl font-bold">—</div>
+    </div>
+    <div class="p-4 rounded-xl bg-amber-600 text-white shadow" id="kpi_clientesmin">
+      <div class="text-sm opacity-80">Clientes-min afectado</div>
+      <div class="text-3xl font-bold">—</div>
+    </div>
+    <div class="p-4 rounded-xl bg-rose-600 text-white shadow" id="kpi_potencia">
+      <div class="text-sm opacity-80">Potencia total (kW)</div>
+      <div class="text-3xl font-bold">—</div>
+    </div>
+  </div>
+
+  <!-- Charts -->
+  <div class="mt-8 grid grid-cols-1 lg:grid-cols-2 gap-6">
+    <div class="p-4 rounded-xl border bg-white">
+      <div class="text-lg font-semibold mb-2">G1 · Incidencias por día</div>
+      <div id="chart_g1" style="height: 360px;"></div>
+    </div>
+    <div class="p-4 rounded-xl border bg-white">
+      <div class="text-lg font-semibold mb-2">G2 · Minutos por día</div>
+      <div id="chart_g2" style="height: 360px;"></div>
+    </div>
+    <div class="p-4 rounded-xl border bg-white">
+      <div class="text-lg font-semibold mb-2">G3 · Pareto de causas (Incidencias)</div>
+      <div id="chart_g3" style="height: 360px;"></div>
+    </div>
+    <div class="p-4 rounded-xl border bg-white">
+      <div class="text-lg font-semibold mb-2">G4 · Pareto de causas (Minutos)</div>
+      <div id="chart_g4" style="height: 360px;"></div>
+    </div>
+    <div class="p-4 rounded-xl border bg-white">
+      <div class="text-lg font-semibold mb-2">G6 · Heatmap Hora × Día (minutos)</div>
+      <div id="chart_g6" style="height: 380px;"></div>
+    </div>
+    <div class="p-4 rounded-xl border bg-white">
+      <div class="text-lg font-semibold mb-2">G12 · Histograma de Duración</div>
+      <div id="chart_g12" style="height: 380px;"></div>
+    </div>
   </div>
 
   <div class="mt-6">
     <a href="{{ url_for('main.index') }}" class="text-indigo-600 hover:underline">← Volver a filtros</a>
   </div>
 </div>
+
+<!-- ECharts -->
+<script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
+<script>
+(function(){
+  const params = new URLSearchParams(window.location.search);
+  const q = new URLSearchParams({
+    start_date: params.get('start_date')||'',
+    end_date: params.get('end_date')||'',
+    distrito: params.get('distrito')||'',
+    causa: params.get('causa')||'',
+    nivel_tension: params.get('nivel_tension')||''
+  });
+
+  // Helpers
+  function fmtNumber(x){
+    if(x == null) return '—';
+    return Intl.NumberFormat('es-AR', {maximumFractionDigits: 2}).format(x);
+  }
+
+  // KPIs
+  fetch(`/api/graficos/kpis?${q.toString()}`).then(r=>r.json()).then(d=>{
+    document.querySelector('#kpi_incidencias .font-bold').textContent = fmtNumber(d.incidencias);
+    document.querySelector('#kpi_minutos .font-bold').textContent = fmtNumber(d.total_minutos);
+    document.querySelector('#kpi_clientesmin .font-bold').textContent = fmtNumber(d.clientes_min);
+    document.querySelector('#kpi_potencia .font-bold').textContent = fmtNumber(d.potencia_total_kw);
+  }).catch(()=>{});
+
+  // Chart init
+  const g1 = echarts.init(document.getElementById('chart_g1'));
+  const g2 = echarts.init(document.getElementById('chart_g2'));
+  const g3 = echarts.init(document.getElementById('chart_g3'));
+  const g4 = echarts.init(document.getElementById('chart_g4'));
+  const g6 = echarts.init(document.getElementById('chart_g6'));
+  const g12 = echarts.init(document.getElementById('chart_g12'));
+
+  // Responsive
+  window.addEventListener('resize', () => { g1.resize(); g2.resize(); g3.resize(); g4.resize(); g6.resize(); g12.resize();  });
+
+  // G1 — Incidencias por día
+  g1.setOption({
+    tooltip: { trigger: 'axis' },
+    toolbox: { feature: { saveAsImage: {} } },
+    legend: { data: ['Total','BT','MT'] },
+    xAxis: { type: 'category', data: [] },
+    yAxis: { type: 'value', name: 'Incidencias' },
+    dataZoom: [{ type: 'inside' }, { type: 'slider' }],
+    series: [
+      { name: 'Total', type: 'line', areaStyle: {}, data: [] },
+      { name: 'BT', type: 'line', areaStyle: {}, data: [] },
+      { name: 'MT', type: 'line', areaStyle: {}, data: [] }
+    ]
+  });
+  fetch(`/api/graficos/serie_incidencias?${q.toString()}`).then(r=>r.json()).then(d=>{
+    g1.setOption({ xAxis: { data: d.dates }, series: [ {data:d.total},{data:d.BT},{data:d.MT} ] });
+  });
+
+  // G2 — Minutos por día
+  g2.setOption({
+    tooltip: { trigger: 'axis' },
+    toolbox: { feature: { saveAsImage: {} } },
+    legend: { data: ['Total','BT','MT'] },
+    xAxis: { type: 'category', data: [] },
+    yAxis: { type: 'value', name: 'Minutos' },
+    dataZoom: [{ type: 'inside' }, { type: 'slider' }],
+    series: [
+      { name: 'Total', type: 'bar', stack: 'sum', data: [] },
+      { name: 'BT', type: 'bar', stack: 'sum', data: [] },
+      { name: 'MT', type: 'bar', stack: 'sum', data: [] }
+    ]
+  });
+  fetch(`/api/graficos/serie_duracion?${q.toString()}`).then(r=>r.json()).then(d=>{
+    g2.setOption({ xAxis: { data: d.dates }, series: [ {data:d.total},{data:d.BT},{data:d.MT} ] });
+  });
+
+  // G3 — Pareto (Incidencias)
+  g3.setOption({
+    tooltip: { trigger: 'axis' },
+    toolbox: { feature: { saveAsImage: {} } },
+    grid: { right: 50 },
+    xAxis: [{ type: 'category', data: [], axisLabel: { interval: 0, rotate: 30 } }],
+    yAxis: [
+      { type: 'value', name: 'Incidencias' },
+      { type: 'value', name: '% Acum', min: 0, max: 100 }
+    ],
+    series: [
+      { name: 'Incidencias', type: 'bar', data: [] },
+      { name: '% Acum', type: 'line', yAxisIndex: 1, data: [] }
+    ]
+  });
+  fetch(`/api/graficos/pareto_causas?metric=incidencias&${q.toString()}`).then(r=>r.json()).then(d=>{
+    g3.setOption({ xAxis: [{ data: d.categories }], series: [ {data:d.values}, {data:d.acumulada_pct} ] });
+  });
+
+  // G4 — Pareto (Minutos)
+  g4.setOption({
+    tooltip: { trigger: 'axis' },
+    toolbox: { feature: { saveAsImage: {} } },
+    grid: { right: 50 },
+    xAxis: [{ type: 'category', data: [], axisLabel: { interval: 0, rotate: 30 } }],
+    yAxis: [
+      { type: 'value', name: 'Minutos' },
+      { type: 'value', name: '% Acum', min: 0, max: 100 }
+    ],
+    series: [
+      { name: 'Minutos', type: 'bar', data: [] },
+      { name: '% Acum', type: 'line', yAxisIndex: 1, data: [] }
+    ]
+  });
+  fetch(`/api/graficos/pareto_causas?metric=minutos&${q.toString()}`).then(r=>r.json()).then(d=>{
+    g4.setOption({ xAxis: [{ data: d.categories }], series: [ {data:d.values}, {data:d.acumulada_pct} ] });
+  });
+   // G6 — Heatmap hora×día
+  g6.setOption({
+    tooltip: { position: 'top', formatter: (p)=>{
+      const v = p.data && p.data[2] || 0;
+      return `${p.marker} ${p.name}<br/>Valor: ${Intl.NumberFormat('es-AR', {maximumFractionDigits:2}).format(v)}`;
+    }},
+    grid: { height: '70%', top: 40 },
+    toolbox: { feature: { saveAsImage: {} } },
+    xAxis: {
+      type: 'category',
+      data: Array.from({length:24}, (_,i)=>i.toString().padStart(2,'0')),
+      splitArea: { show: true },
+      name: 'Hora'
+    },
+    yAxis: {
+      type: 'category',
+      data: ['Lun','Mar','Mié','Jue','Vie','Sáb','Dom'],
+      splitArea: { show: true },
+      name: 'Día'
+    },
+    visualMap: {
+      min: 0,
+      max: 1,
+      calculable: true,
+      orient: 'horizontal',
+      left: 'center',
+      bottom: 0
+    },
+    series: [{
+      name: 'Heatmap',
+      type: 'heatmap',
+      data: [],
+      label: { show: false },
+      emphasis: { itemStyle: { shadowBlur: 10, shadowColor: 'rgba(0,0,0,0.4)' } }
+    }]
+  });
+
+  fetch(`/api/graficos/heatmap_horadia?${q.toString()}`)
+    .then(r=>r.json())
+    .then(d=>{
+      g6.setOption({
+        yAxis: { data: d.weekdays },
+        series: [{ data: d.data }],
+        visualMap: { max: Math.max(1, d.max) }
+      });
+    });
+      // G12 — Histograma de duración (Total/BT/MT)
+  g12.setOption({
+    tooltip: { trigger: 'axis' },
+    toolbox: { feature: { saveAsImage: {} } },
+    legend: { data: ['Total','BT','MT'] },
+    xAxis: { type: 'category', data: [] },
+    yAxis: { type: 'value', name: 'Incidencias' },
+    series: [
+      { name: 'Total', type: 'bar', data: [] },
+      { name: 'BT', type: 'bar', data: [] },
+      { name: 'MT', type: 'bar', data: [] }
+    ]
+  });
+
+  fetch(`/api/graficos/histo_duracion?${q.toString()}`)
+    .then(r=>r.json())
+    .then(d=>{
+      g12.setOption({
+        xAxis: { data: d.categories },
+        series: [ {data: d.total}, {data: d.BT}, {data: d.MT} ]
+      });
+    });
+})();
+</script>
 {% endblock %}

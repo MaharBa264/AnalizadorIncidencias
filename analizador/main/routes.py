@@ -6,6 +6,8 @@ import io
 import pandas as pd
 import threading
 import pytz
+import math
+from collections import defaultdict, Counter
 from datetime import datetime, date, time, timedelta
 from flask import render_template, request, redirect, url_for, jsonify, current_app, send_file, flash
 from flask_login import login_required, current_user
@@ -18,6 +20,84 @@ from ..decorators import admin_required
 # Fechas y zona horaria
 # =========================
 TZ = pytz.timezone("America/Argentina/San_Luis")
+
+def _to_local(dt: datetime) -> datetime:
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        return TZ.localize(dt)
+    return dt.astimezone(TZ)
+
+
+def _coerce_float(x, default=0.0):
+    try:
+        if x is None:
+            return default
+        if isinstance(x, (int, float)):
+            return float(x)
+        s = str(x).replace(',', '.')
+        return float(s)
+    except Exception:
+        return default
+
+
+def _coerce_int(x, default=0):
+    try:
+        if x is None:
+            return default
+        if isinstance(x, (int,)):
+            return int(x)
+        s = str(x).strip()
+        return int(float(s.replace(',', '.')))
+    except Exception:
+        return default
+
+
+def _incident_iter(incidents):
+    """Itera incidentes normalizados con dt_inicio_local, dt_fin_local y dur_min."""
+    for inc in incidents:
+        f_ini = inc.get('fecha_inicio_fmt') or inc.get('fecha_inicio')
+        h_ini = inc.get('hora_inicio_fmt')  or inc.get('hora_inicio')
+        f_fin = inc.get('fecha_fin_fmt')    or inc.get('fecha_fin')
+        h_fin = inc.get('hora_fin_fmt')     or inc.get('hora_fin')
+
+        dt_ini = _parse_datetime_flexible(f_ini, h_ini)
+        dt_fin = _parse_datetime_flexible(f_fin, h_fin)
+        if not dt_ini or not dt_fin:
+            continue
+        dt_ini = _to_local(dt_ini)
+        dt_fin = _to_local(dt_fin)
+        if dt_fin < dt_ini:
+            continue
+        dur_min = max(0, (dt_fin - dt_ini).total_seconds() / 60.0)
+        nivel = inc.get('nivel_tension') or inc.get('nivel_tensión') or inc.get('nivel') or 'N/D'
+        causa = inc.get('descripcion_de_la_causa') or 'Sin causa'
+        nises = _coerce_int(inc.get('nises_involucrados'))
+        pot   = _coerce_float(inc.get('potencia_involucrada'))
+
+        yield {
+            'dt_inicio_local': dt_ini,
+            'dt_fin_local': dt_fin,
+            'dur_min': dur_min,
+            'nivel_tension': nivel,
+            'causa': causa,
+            'nises': nises,
+            'potencia': pot,
+        }
+
+def _fetch_incidents_with_filters():
+    sd = _parse_date_flexible(request.args.get('start_date'))
+    ed = _parse_date_flexible(request.args.get('end_date'))
+    start_date = sd.date() if sd else None
+    end_date   = ed.date() if ed else None
+
+    distrito = (request.args.get('distrito') or '').strip() or None
+    causa    = (request.args.get('causa') or '').strip() or None
+    nivel    = (request.args.get('nivel_tension') or '').strip() or None
+
+    incidents = get_filtered_incidents(start_date, end_date, distrito, causa, nivel)
+    return list(_incident_iter(incidents))
+
 
 def _to_date_any(x):
     if isinstance(x, datetime): return x.date()
@@ -463,6 +543,210 @@ def graficos():
     }
     return render_template('graficos.html', name=current_user.name, form_data=form_data)
 
+@main.route('/api/graficos/kpis', methods=['GET'])
+@login_required
+def api_kpis():
+    rows = _fetch_incidents_with_filters()
+    total_inc = len(rows)
+    total_min = sum(r['dur_min'] for r in rows)
+    clientes_min = sum(r['nises'] * r['dur_min'] for r in rows)
+    potencia_total = sum(r['potencia'] for r in rows)
+
+    return jsonify({
+        'incidencias': total_inc,
+        'total_minutos': round(total_min, 2),
+        'clientes_min': round(clientes_min, 2),
+        'potencia_total_kw': round(potencia_total, 2)
+    })
+
+@main.route('/api/graficos/serie_incidencias', methods=['GET'])
+@login_required
+def api_serie_incidencias():
+    rows = _fetch_incidents_with_filters()
+    # Conjunto de días presentes
+    dias = set()
+    for r in rows:
+        dias.add(r['dt_inicio_local'].date())
+    if not dias:
+        return jsonify({'dates': [], 'total': [], 'BT': [], 'MT': []})
+
+    dates_sorted = sorted(dias)
+    idx = {d: i for i, d in enumerate(dates_sorted)}
+    total = [0]*len(dates_sorted)
+    bt    = [0]*len(dates_sorted)
+    mt    = [0]*len(dates_sorted)
+
+    for r in rows:
+        i = idx[r['dt_inicio_local'].date()]
+        total[i] += 1
+        nv = (r['nivel_tension'] or '').upper()
+        if nv == 'BT':
+            bt[i] += 1
+        elif nv == 'MT':
+            mt[i] += 1
+
+    return jsonify({
+        'dates': [d.strftime('%Y-%m-%d') for d in dates_sorted],
+        'total': total,
+        'BT': bt,
+        'MT': mt,
+    })
+
+
+@main.route('/api/graficos/serie_duracion', methods=['GET'])
+@login_required
+def api_serie_duracion():
+    rows = _fetch_incidents_with_filters()
+    dias = set(r['dt_inicio_local'].date() for r in rows)
+    if not dias:
+        return jsonify({'dates': [], 'total': [], 'BT': [], 'MT': []})
+
+    dates_sorted = sorted(dias)
+    idx = {d: i for i, d in enumerate(dates_sorted)}
+    total = [0.0]*len(dates_sorted)
+    bt    = [0.0]*len(dates_sorted)
+    mt    = [0.0]*len(dates_sorted)
+
+    for r in rows:
+        i = idx[r['dt_inicio_local'].date()]
+        total[i] += r['dur_min']
+        nv = (r['nivel_tension'] or '').upper()
+        if nv == 'BT':
+            bt[i] += r['dur_min']
+        elif nv == 'MT':
+            mt[i] += r['dur_min']
+
+    return jsonify({
+        'dates': [d.strftime('%Y-%m-%d') for d in dates_sorted],
+        'total': [round(x,2) for x in total],
+        'BT': [round(x,2) for x in bt],
+        'MT': [round(x,2) for x in mt],
+    })
+
+@main.route('/api/graficos/pareto_causas', methods=['GET'])
+@login_required
+def api_pareto_causas():
+    metric = (request.args.get('metric') or 'incidencias').lower()
+    rows = _fetch_incidents_with_filters()
+
+    agg = defaultdict(float)
+    for r in rows:
+        key = r['causa']
+        if metric == 'minutos':
+            agg[key] += r['dur_min']
+        else:
+            agg[key] += 1.0
+
+    # Orden descendente y top N (p.ej., top 12) + "Otros"
+    items = sorted(agg.items(), key=lambda kv: kv[1], reverse=True)
+    TOPN = 12
+    top = items[:TOPN]
+    rest = items[TOPN:]
+    if rest:
+        otros_val = sum(v for _, v in rest)
+        top.append(('Otros', otros_val))
+
+    categories = [k for k,_ in top]
+    values = [round(v,2) for _,v in top]
+
+    # Cálculo de acumulada (%)
+    total = sum(values) or 1.0
+    acumulada = []
+    run = 0.0
+    for v in values:
+        run += v
+        acumulada.append(round(100.0*run/total, 2))
+
+    return jsonify({
+        'categories': categories,
+        'values': values,
+        'acumulada_pct': acumulada
+    })
+
+@main.route('/api/graficos/heatmap_horadia', methods=['GET'])
+@login_required
+def api_heatmap_horadia():
+    """Mapa de calor hora (0–23) × día de semana (Lun–Dom).
+    Parámetro opcional: metric=incidencias|minutos (default: minutos)
+    """
+    metric = (request.args.get('metric') or 'minutos').lower()
+    rows = _fetch_incidents_with_filters()
+
+    # Ejes
+    horas = list(range(24))
+    week_labels = ['Lun','Mar','Mié','Jue','Vie','Sáb','Dom']  # Monday=0
+
+    # Matriz 7x24 inicializada en 0
+    mat = [[0.0 for _ in horas] for _ in range(7)]
+
+    for r in rows:
+        dow = r['dt_inicio_local'].weekday()  # 0=Lun ... 6=Dom
+        h   = r['dt_inicio_local'].hour
+        if metric == 'incidencias':
+            mat[dow][h] += 1.0
+        else:
+            mat[dow][h] += r['dur_min']
+
+    # Convertimos a tripletas [x(hour), y(dow), value]
+    data = []
+    vmax = 0.0
+    for y in range(7):
+        for x in horas:
+            v = round(mat[y][x], 2)
+            vmax = max(vmax, v)
+            data.append([x, y, v])
+
+    return jsonify({
+        'hours': horas,
+        'weekdays': week_labels,
+        'data': data,
+        'max': round(vmax, 2),
+        'metric': metric
+    })
+
+@main.route('/api/graficos/histo_duracion', methods=['GET'])
+@login_required
+def api_histo_duracion():
+    """Histograma por bins de duración en minutos.
+    Bins: <15, 15–60, 60–120, 120–240, >240.
+    Devuelve series Total, BT y MT (barras apiladas).
+    """
+    rows = _fetch_incidents_with_filters()
+
+    bins = [
+        ('<15',    lambda m: m < 15),
+        ('15–60',  lambda m: 15 <= m < 60),
+        ('1–2h',   lambda m: 60 <= m < 120),
+        ('2–4h',   lambda m: 120 <= m < 240),
+        ('>4h',    lambda m: m >= 240),
+    ]
+
+    cats = [b[0] for b in bins]
+    tot = [0]*len(bins)
+    bt  = [0]*len(bins)
+    mt  = [0]*len(bins)
+
+    def bin_index(m):
+        for i, (_, cond) in enumerate(bins):
+            if cond(m):
+                return i
+        return len(bins)-1
+
+    for r in rows:
+        i = bin_index(r['dur_min'])
+        tot[i] += 1
+        nv = (r['nivel_tension'] or '').upper()
+        if nv == 'BT':
+            bt[i] += 1
+        elif nv == 'MT':
+            mt[i] += 1
+
+    return jsonify({
+        'categories': cats,
+        'total': tot,
+        'BT': bt,
+        'MT': mt
+    })
 
 @main.route('/admin')
 @login_required
