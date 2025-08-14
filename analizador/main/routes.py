@@ -784,30 +784,22 @@ def api_histo_duracion():
 @main.route('/comparar_clima', methods=['GET', 'POST'])
 @login_required
 def comparar_clima():
-    # Opciones para selects
     distritos, _ = get_filter_options()
     available_start_dates = get_available_dates()
 
     form_data = {
-        'start_date': '',
-        'end_date': '',
-        'distrito': '',
-        'nivel_tension': ''
+        'start_date': request.values.get('start_date', '').strip(),
+        'end_date':   request.values.get('end_date', '').strip(),
+        'distrito':   request.values.get('distrito', '').strip(),
+        'nivel_tension': request.values.get('nivel_tension', '').strip(),
     }
 
-    df_result = None
+    sd = _parse_date_or_none(form_data['start_date'])
+    available_end_dates = _build_available_end_dates(sd) if sd else []
 
-    # --- GET: permitir precargar "Hasta" cuando cambia "Desde" (via querystring) ---
-    if request.method == 'GET':
-        qs_start = (request.args.get('start_date') or '').strip()
-        if qs_start:
-            form_data['start_date'] = qs_start
-            sd = _parse_date_or_none(qs_start)
-            available_end_dates = _build_available_end_dates(sd) if sd else []
-        else:
-            available_end_dates = []
-        return render_template(
-            'comparar_clima.html',
+    # GET inicial (sin start_date): solo muestra filtros
+    if request.method == 'GET' and not request.args.get('start_date'):
+        return render_template('comparar_clima.html',
             name=current_user.name,
             distritos=distritos,
             available_start_dates=available_start_dates,
@@ -816,107 +808,91 @@ def comparar_clima():
             df_result=None
         )
 
-    # --- POST ---
-    sd = _parse_date_or_none(request.form.get('start_date'))
-    ed = _parse_date_or_none(request.form.get('end_date'))
-    start_date = sd.date() if sd else None
-    end_date   = ed.date() if ed else None
+    # Normalizar filtros
+    start_date = _parse_date_or_none(form_data['start_date'])
+    end_date   = _parse_date_or_none(form_data['end_date'])
+    distrito   = form_data['distrito'] or None
+    nivel_tension = form_data['nivel_tension'] or None
+    if nivel_tension == 'Todos':
+        nivel_tension = None
+    if distrito == 'Todos':
+        distrito = None
 
-    distrito      = (request.form.get('distrito') or '').strip() or None
-    nivel_tension = (request.form.get('nivel_tension') or '').strip() or None
+    if start_date and not end_date:
+        end_date = start_date
 
-    form_data.update({
-        'start_date': request.form.get('start_date') or '',
-        'end_date':   request.form.get('end_date') or '',
-        'distrito':   distrito or '',
-        'nivel_tension': nivel_tension or '',
-    })
+    effective_start = start_date.date() if start_date else None
+    effective_end   = end_date.date() if end_date else None
 
-    # Validaciones de fechas
-    if end_date and not start_date:
-        flash("Seleccione primero la fecha 'Desde'.", "warning")
-        return render_template(
-            'comparar_clima.html',
-            name=current_user.name,
-            distritos=distritos,
-            available_start_dates=available_start_dates,
-            available_end_dates=[],
-            form_data=form_data,
-            df_result=None
-        )
+    print(f"[comparar_clima] FORM => {form_data}")
+    print(f"[comparar_clima] filtros sd={effective_start} ed={effective_end} dist={distrito or 'Todos'} nt={nivel_tension or 'Todos'}")
 
-    if start_date and end_date and end_date < start_date:
-        flash("'Hasta' no puede ser anterior a 'Desde'.", "warning")
-        return render_template(
-            'comparar_clima.html',
-            name=current_user.name,
-            distritos=distritos,
-            available_start_dates=available_start_dates,
-            available_end_dates=_build_available_end_dates(sd) if sd else [],
-            form_data=form_data,
-            df_result=None
-        )
-
-    # Traer incidencias con tus helpers
-    if start_date:
-        effective_end = end_date or start_date
-        base_incidents = get_filtered_incidents(start_date, effective_end, distrito, None, nivel_tension)
-    else:
-        base_incidents = get_filtered_incidents(None, None, distrito, None, nivel_tension)
-
-    # Normalizar a estructura con dt_inicio_local / dt_fin_local / dur_min
+    # 1) Traer incidencias
+    base_incidents = get_filtered_incidents(effective_start, effective_end, distrito, None, nivel_tension)
     norm = list(_incident_iter(base_incidents))
+    print(f"[comparar_clima] incidencias normalizadas = {len(norm)}")
+    if norm[:1]:
+        # dump de ejemplo para ver las claves
+        sample = {k: (str(v)[:19] if 'dt_' in k else v) for k,v in norm[0].items()}
+        print(f"[comparar_clima] ejemplo incidencia -> {sample}")
 
-    # Si no hay incidencias, devolvemos info y no seguimos al clima
     if not norm:
-        flash("No hay incidencias para los filtros elegidos (rango y/o distrito).", "info")
-        return render_template(
-            'comparar_clima.html',
+        # Sin incidencias: devolver DF vacío (la vista muestra el banner azul)
+        return render_template('comparar_clima.html',
             name=current_user.name,
             distritos=distritos,
             available_start_dates=available_start_dates,
-            available_end_dates=_build_available_end_dates(sd) if sd else [],
+            available_end_dates=available_end_dates,
             form_data=form_data,
-            df_result=None
+            df_result=pd.DataFrame()
         )
 
-    # CSV de mapeo distrito → tag textual
+    # 2) CSV distrito -> tag clima
     csv_path = os.path.join(current_app.instance_path, 'distritos_weather_tag.csv')
     try:
         dmap = load_distrito_tags(csv_path)
+        print(f"[comparar_clima] CSV tags -> {len(dmap)} mapeos. Ej: {list(dmap.items())[:3]}")
     except Exception as e:
         flash(f"No se pudo leer CSV de distritos/tags: {e}", 'danger')
+        print(f"[comparar_clima] ERROR cargando CSV tags: {e}")
         dmap = {}
 
-    # Clima (cliente remoto)
-    w_query_api = weather_influx_client.query_api()
+    # 3) Clima y cruce
     try:
+        w_query_api = weather_influx_client.query_api()
         df_result = cross_incidents_with_weather(w_query_api, norm, dmap)
+        n_rows = 0 if (df_result is None) else len(df_result)
+        print(f"[comparar_clima] filas cruzadas = {n_rows}")
     except Exception as e:
         flash(f"Error consultando clima: {e}", 'danger')
-        df_result = None
+        print(f"[comparar_clima] EXCEPTION cruzando clima: {e}")
+        df_result = pd.DataFrame()
 
-    if df_result is None or df_result.empty:
-        flash("No hay resultados para los filtros elegidos (¿hay incidencias en ese rango/distrito?).", "info")
-    else:
-        # Diagnóstico rápido en logs
-        current_app.logger.info(f"[comparar_clima] columnas resultado: {list(df_result.columns)}")
-        # Orden “seguro”: solo por columnas presentes
+    # Fallback: si hubo incidencias pero el cruce dio 0 filas, no dejamos la página en blanco
+    if (df_result is None) or df_result.empty:
+        print("[comparar_clima] WARNING: cross devolvió 0 con incidencias>0. Aplico fallback sin_tag.")
+        rows = []
+        for inc in norm:
+            row = {**inc}
+            row.update({
+                "viento_max": None,
+                "viento_prom": None,
+                "humedad_prom": None,
+                "temp_prom": None,
+                "humedad_prev_6h": None,
+                "_clima": "sin_tag"
+            })
+            rows.append(row)
+        df_result = pd.DataFrame(rows)
+
+    # Orden amigable si están las columnas
+    if not df_result.empty:
         sort_keys = [c for c in ['distrito', 'dt_inicio_local', 'dt_fin_local'] if c in df_result.columns]
         if sort_keys:
             df_result = df_result.sort_values(by=sort_keys)
-        else:
-            flash("Resultados sin columnas de orden estándar (distrito/fechas). Revisar normalización de incidencias.", "warning")
 
-
-    if df_result is not None and not df_result.empty:
-        df_result = df_result.sort_values(by=['distrito', 'dt_inicio_local'])
-
-    # "Hasta" para este POST (en base a "Desde")
-    available_end_dates = _build_available_end_dates(sd) if sd else []
-
-    return render_template(
-        'comparar_clima.html',
+    print(f"[comparar_clima] render con filas={len(df_result)}")
+    return render_template('comparar_clima.html',
         name=current_user.name,
         distritos=distritos,
         available_start_dates=available_start_dates,
@@ -924,6 +900,7 @@ def comparar_clima():
         form_data=form_data,
         df_result=df_result
     )
+
 
 @main.route('/admin')
 @login_required

@@ -3,6 +3,7 @@
 {% block content %}
 <div class="bg-white p-6 rounded-xl shadow-md mb-8">
   <h2 class="text-2xl font-bold mb-4">Cruce Incidencias ↔ Clima</h2>
+
   <form method="POST" action="{{ url_for('main.comparar_clima') }}">
     <div class="grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
       <div>
@@ -14,6 +15,7 @@
           {% endfor %}
         </select>
       </div>
+
       <div>
         <label class="block text-sm font-medium text-gray-700">Hasta</label>
         <select name="end_date" id="end_date" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm">
@@ -23,44 +25,56 @@
           {% endfor %}
         </select>
       </div>
+
       <div>
         <label class="block text-sm font-medium text-gray-700">Distrito</label>
-        <select name="distrito" id="distrito" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm">
-          <option value="">Todos</option>
+        <select name="distrito" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm">
+          <option value="Todos" {% if form_data.get('distrito','') in ['', 'Todos'] %}selected{% endif %}>Todos</option>
           {% for d in distritos %}
             <option value="{{ d }}" {% if form_data.get('distrito','')==d %}selected{% endif %}>{{ d }}</option>
           {% endfor %}
         </select>
       </div>
+
       <div>
         <label class="block text-sm font-medium text-gray-700">Nivel de tensión</label>
-        <select name="nivel_tension" id="nivel_tension" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm">
-          <option value="">Todos</option>
-          <option value="ALTA"  {% if form_data.get('nivel_tension','')=='ALTA' %}selected{% endif %}>Alta</option>
-          <option value="MEDIA" {% if form_data.get('nivel_tension','')=='MEDIA' %}selected{% endif %}>Media</option>
+        <select name="nivel_tension" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm">
+          <option value="Todos" {% if form_data.get('nivel_tension','') in ['', 'Todos'] %}selected{% endif %}>Todos</option>
+          <option value="Alta"  {% if form_data.get('nivel_tension')=='Alta' %}selected{% endif %}>Alta</option>
+          <option value="Media" {% if form_data.get('nivel_tension')=='Media' %}selected{% endif %}>Media</option>
+          <option value="Baja"  {% if form_data.get('nivel_tension')=='Baja' %}selected{% endif %}>Baja</option>
         </select>
       </div>
+
       <div class="md:col-span-4 flex gap-3">
-        <button type="submit" class="inline-flex items-center px-4 py-2 rounded-md bg-indigo-600 text-white shadow hover:bg-indigo-700">Cruzar</button>
+        <button type="submit" class="inline-flex items-center px-4 py-2 rounded-lg bg-indigo-600 text-white shadow hover:bg-indigo-700">Cruzar</button>
         {% if df_result is not none and not df_result.empty %}
-        <a href="#" onclick="exportTableToCSV('incidencias_clima.csv')" class="inline-flex items-center px-4 py-2 rounded-md bg-gray-100 text-gray-700 shadow hover:bg-gray-200">Descargar CSV</a>
+        <a href="#" onclick="exportTableToCSV('incidencias_clima.csv')" class="inline-flex items-center px-4 py-2 rounded-lg bg-gray-100 text-gray-700 shadow hover:bg-gray-200">Descargar CSV</a>
         {% endif %}
       </div>
     </div>
   </form>
 </div>
 
+{# -------- Banner de estado -------- #}
 {% if df_result is none %}
-  <p class="text-gray-500">Seleccione filtros y presione <strong>Cruzar</strong>.</p>
+  <div class="p-4 rounded-lg bg-yellow-50 text-yellow-800 mb-4">
+    Seleccione filtros y presione <strong>Cruzar</strong>.
+  </div>
 {% elif df_result.empty %}
-  <p class="text-gray-500">Sin resultados para los filtros elegidos.</p>
+  <div class="p-4 rounded-lg bg-blue-50 text-blue-800 mb-4">
+    Sin resultados para los filtros elegidos.
+  </div>
 {% else %}
+  <div class="p-3 rounded-lg bg-green-50 text-green-800 mb-4">
+    Mostrando <strong>{{ df_result|length }}</strong> incidencias cruzadas con clima.
+  </div>
+
   <div class="bg-white p-4 rounded-xl shadow-md overflow-auto">
     <table id="tabla" class="min-w-full text-sm">
       <thead>
         <tr class="text-left border-b">
           <th class="py-2 pr-4">Distrito</th>
-          <th class="py-2 pr-4">Nro Incidencia</th>
           <th class="py-2 pr-4">Inicio</th>
           <th class="py-2 pr-4">Fin</th>
           <th class="py-2 pr-4">Dur (min)</th>
@@ -69,16 +83,47 @@
           <th class="py-2 pr-4">Humedad prom (%)</th>
           <th class="py-2 pr-4">Temp prom (°C)</th>
           <th class="py-2 pr-4">Humedad prev 6h (%)</th>
+          <th class="py-2 pr-4">Clima</th>
         </tr>
       </thead>
       <tbody>
         {% for _, r in df_result.iterrows() %}
         <tr class="border-b hover:bg-gray-50">
-          <td class="py-1 pr-4">{{ '%.2f' % r['viento_max'] if r['viento_max']==r['viento_max'] else '' }}</td>
-          <td class="py-1 pr-4">{{ '%.2f' % r['viento_prom'] if r['viento_prom']==r['viento_prom'] else '' }}</td>
-          <td class="py-1 pr-4">{{ '%.2f' % r['humedad_prom'] if r['humedad_prom']==r['humedad_prom'] else '' }}</td>
-          <td class="py-1 pr-4">{{ '%.2f' % r['temp_prom'] if r['temp_prom']==r['temp_prom'] else '' }}</td>
-          <td class="py-1 pr-4">{{ '%.2f' % r['humedad_prev_6h'] if r['humedad_prev_6h']==r['humedad_prev_6h'] else '' }}</td>
+          <td class="py-1 pr-4">{{ r['distrito'] }}</td>
+
+          <td class="py-1 pr-4">
+            {% if r['dt_inicio_local'] %}{{ r['dt_inicio_local'].strftime('%Y-%m-%d %H:%M') }}{% endif %}
+          </td>
+
+          <td class="py-1 pr-4">
+            {% if r['dt_fin_local'] %}{{ r['dt_fin_local'].strftime('%Y-%m-%d %H:%M') }}{% endif %}
+          </td>
+
+          {# Duración #}
+          {% set dur = r.get('dur_min') %}
+          <td class="py-1 pr-4">{% if dur is not none and dur == dur %}{{ '%.1f' % dur }}{% endif %}</td>
+
+          {# Viento máx #}
+          {% set vm = r.get('viento_max') %}
+          <td class="py-1 pr-4">{% if vm is not none and vm == vm %}{{ '%.2f' % vm }}{% endif %}</td>
+
+          {# Viento prom #}
+          {% set vp = r.get('viento_prom') %}
+          <td class="py-1 pr-4">{% if vp is not none and vp == vp %}{{ '%.2f' % vp }}{% endif %}</td>
+
+          {# Humedad prom (puede no existir) #}
+          {% set hp = r.get('humedad_prom') %}
+          <td class="py-1 pr-4">{% if hp is not none and hp == hp %}{{ '%.2f' % hp }}{% endif %}</td>
+
+          {# Temp prom (puede no existir) #}
+          {% set tp = r.get('temp_prom') %}
+          <td class="py-1 pr-4">{% if tp is not none and tp == tp %}{{ '%.2f' % tp }}{% endif %}</td>
+
+          {# Humedad prev 6h (puede no existir) #}
+          {% set h6 = r.get('humedad_prev_6h') %}
+          <td class="py-1 pr-4">{% if h6 is not none and h6 == h6 %}{{ '%.2f' % h6 }}{% endif %}</td>
+
+          <td class="py-1 pr-4">{{ r.get('_clima','') }}</td>
         </tr>
         {% endfor %}
       </tbody>
@@ -88,20 +133,23 @@
   <script>
   function exportTableToCSV(filename) {
     const rows = Array.from(document.querySelectorAll('#tabla tr'));
-    const csv = rows.map(r => Array.from(r.querySelectorAll('th,td')).map(c => '"' + (c.innerText||'').replaceAll('"','""') + '"').join(',')).join('\n');
+    const csv = rows.map(row =>
+      Array.from(row.querySelectorAll('th,td'))
+        .map(cell => '"' + (cell.innerText || '').replace(/"/g,'""') + '"')
+        .join(',')
+    ).join('\n');
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
     const link = document.createElement('a');
     link.href = URL.createObjectURL(blob);
     link.download = filename;
     link.click();
   }
-
-  
   </script>
 {% endif %}
+
 <script>
 // Al cambiar "Desde", recargo con ?start_date=YYYY-MM-DD para que el servidor
-// recalule el combo "Hasta" sin necesidad de presionar "Cruzar".
+// recalcule el combo "Hasta" sin necesidad de presionar "Cruzar".
 document.getElementById('start_date').addEventListener('change', function () {
   const url = new URL(window.location.href);
   if (this.value) {

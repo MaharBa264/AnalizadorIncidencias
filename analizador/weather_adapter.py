@@ -15,6 +15,17 @@ from . import (
 
 TZ = pytz.timezone("America/Argentina/San_Luis")
 
+def _to_utc_string(dt):
+    """
+    Convierte un datetime (naive en hora local o aware en cualquier tz)
+    a string UTC ISO8601 sin comillas para Flux range(): YYYY-MM-DDTHH:MM:SSZ
+    """
+    import pytz
+    if getattr(dt, "tzinfo", None) is None:
+        dt = TZ.localize(dt)          # naive → local tz
+    dt_utc = dt.astimezone(pytz.utc)  # a UTC
+    return dt_utc.strftime('%Y-%m-%dT%H:%M:%SZ')
+
 # ---------------------- Helpers de configuración ----------------------
 
 def _fields_enabled():
@@ -25,23 +36,25 @@ def _fields_enabled():
 
 def load_distrito_tags(csv_path: str):
     """
-    Lee `distrito,weather_tag` → dict {distrito: tag} (strings).
-    NO normaliza el caso: debe coincidir con como venga el 'distrito' en incidencias.
+    Lee `distrito,weather_tag` → dict {DISTRITO: TAG} en MAYÚSCULAS y sin espacios.
     """
+    import os, pandas as pd
     if not os.path.exists(csv_path):
         raise FileNotFoundError(f"No existe el CSV de tags: {csv_path}")
     df = pd.read_csv(csv_path)
-    cols = {c.lower(): c for c in df.columns}
+    cols = {c.strip().lower(): c for c in df.columns}
     if not {"distrito", "weather_tag"}.issubset(cols):
         raise ValueError("CSV debe tener columnas 'distrito' y 'weather_tag'.")
     df = df.rename(columns={cols["distrito"]: "distrito", cols["weather_tag"]: "weather_tag"})
     out = {}
     for _, r in df.iterrows():
-        d = str(r["distrito"]).strip()
-        t = str(r["weather_tag"]).strip()
+        d = str(r["distrito"]).strip().upper()
+        t = str(r["weather_tag"]).strip().upper()
         if d and t:
             out[d] = t
     return out
+
+
 
 # ---------------------- Query a Influx de clima -----------------------
 
@@ -170,56 +183,45 @@ def _require_keys_for_cross(incidents):
 # ---------------------- Cruce incidencias ↔ clima ---------------------
 
 def cross_incidents_with_weather(query_api, incidents, distrito_tags):
-    """
-    - Agrupa incidencias por 'distrito'.
-    - Usa CSV 'distrito' → 'weather_tag' para obtener el valor del tag del clima
-      (por ej., equip_grp = 'ETSL').
-    - Pide al Influx de clima una sola ventana por distrito: [min(dt_inicio)-6h, max(dt_fin)].
-    - Calcula métricas por incidencia y arma un DataFrame con los resultados.
-
-    Si el distrito no existe en el CSV, la fila queda con métricas None y _clima="sin_tag".
-    """
-    _require_keys_for_cross(incidents)
-
     from collections import defaultdict
+    import pytz
+    from datetime import timedelta
+
+    TZ = pytz.timezone("America/Argentina/San_Luis")
+
     by_d = defaultdict(list)
     for inc in incidents:
         by_d[inc.get("distrito") or ""].append(inc)
 
     rows = []
+    print(f"[cross] grupos por distrito = {len(by_d)}")
     for d, items in by_d.items():
-        # Mapear 'distrito' → tag de clima (p.ej. ETSL)
-        tag = distrito_tags.get(str(d).strip())
+        key = (str(d) or "").strip().upper()
+        tag = distrito_tags.get(key)
+        print(f"[cross] d={key!r} n_inc={len(items)} tag={tag!r}")
 
-        # Ventana extendida (-6h al inicio más temprano)
+        # ventana extendida -6h
         t0 = min(i["dt_inicio_local"] for i in items)
         t1 = max(i["dt_fin_local"]   for i in items)
-        start_utc = TZ.localize(t0 - timedelta(hours=6)).astimezone(pytz.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
-        stop_utc  = TZ.localize(t1).astimezone(pytz.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+        start_utc = _to_utc_string(t0 - timedelta(hours=6))
+        stop_utc  = _to_utc_string(t1)
 
-        # Si no hay tag, no consultamos clima; devolvemos filas con métricas vacías
         if not tag:
+            # sin mapeo: devolvemos filas con _clima="sin_tag"
             for inc in items:
-                row = {**inc}
-                row.update({
-                    "viento_max": None,
-                    "viento_prom": None,
-                    "humedad_prom": None,
-                    "temp_prom": None,
-                    "humedad_prev_6h": None,
-                    "_clima": "sin_tag",
-                })
+                row = {**inc, "weather_tag": None,
+                       "viento_max": None, "viento_prom": None,
+                       "humedad_prom": None, "temp_prom": None, "humedad_prev_6h": None,
+                       "_clima": "sin_tag"}
                 rows.append(row)
             continue
 
-        # Traer clima para ese distrito/tag en una sola query
         dfw = fetch_weather_df(query_api, tag, start_utc, stop_utc)
+        print(f"[cross]   clima filas={0 if dfw is None else len(dfw)} (rango {start_utc}..{stop_utc})")
 
-        # Métricas por incidencia
         for inc in items:
             mets = compute_metrics_for_incident(dfw, inc["dt_inicio_local"], inc["dt_fin_local"])
-            row = {**inc}
-            row.update(mets)
+            row = {**inc, "weather_tag": tag, **mets}
             row["_clima"] = "ok" if dfw is not None and not dfw.empty else "sin_datos"
             rows.append(row)
 
