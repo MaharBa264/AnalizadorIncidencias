@@ -24,8 +24,29 @@ INFLUXDB_TOKEN = os.getenv('INFLUXDB_TOKEN')
 INFLUXDB_ORG = os.getenv('INFLUXDB_ORG')
 INFLUXDB_BUCKET = os.getenv('INFLUXDB_BUCKET')
 
+
 # Cliente global de InfluxDB
 influx_client = InfluxDBClient(url=INFLUXDB_URL, token=INFLUXDB_TOKEN, org=INFLUXDB_ORG, timeout=60_000, enable_gzip=True)
+
+# === InfluxDB de Clima (REMOTO/PRODUCCIÓN) ===
+WEATHER_INFLUX_URL = os.getenv('WEATHER_INFLUX_URL') or INFLUXDB_URL
+WEATHER_INFLUX_TOKEN = os.getenv('WEATHER_INFLUX_TOKEN') or INFLUXDB_TOKEN
+WEATHER_INFLUX_ORG = os.getenv('WEATHER_INFLUX_ORG') or INFLUXDB_ORG
+WEATHER_INFLUX_BUCKET = os.getenv('WEATHER_INFLUX_BUCKET', 'weather')
+
+WEATHER_MEASUREMENT  = os.getenv('WEATHER_MEASUREMENT', 'weather_hourly')
+WEATHER_WIND_FIELD   = os.getenv('WEATHER_WIND_FIELD', 'windspeed')
+WEATHER_HUM_FIELD    = os.getenv('WEATHER_HUM_FIELD', 'relative_humidity')
+WEATHER_TEMP_FIELD   = os.getenv('WEATHER_TEMP_FIELD', 'temperature')
+WEATHER_SITE_TAG_KEY = os.getenv('WEATHER_SITE_TAG_KEY', 'site_tag')
+
+weather_influx_client = InfluxDBClient(
+    url=WEATHER_INFLUX_URL,
+    token=WEATHER_INFLUX_TOKEN,
+    org=WEATHER_INFLUX_ORG,
+    timeout=60_000,
+    enable_gzip=True,
+)
 
 def setup_influxdb():
     """Comprueba si el bucket de InfluxDB existe y lo crea si es necesario."""
